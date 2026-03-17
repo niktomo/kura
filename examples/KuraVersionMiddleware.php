@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Katana バージョン検証 Middleware サンプル
+ * Kura バージョン検証 Middleware サンプル
  *
  * リクエストヘッダー X-Reference-Version でクライアントのバージョンを受け取り、
  * サーバー側の最新バージョンと照合する。
@@ -12,7 +12,7 @@
  * 使い方:
  *   // app/Http/Kernel.php or bootstrap/app.php
  *   ->withMiddleware(function (Middleware $middleware) {
- *       $middleware->api(append: [KatanaVersionMiddleware::class]);
+ *       $middleware->api(append: [KuraVersionMiddleware::class]);
  *   })
  */
 
@@ -20,10 +20,10 @@ namespace App\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
-use Katana\Contracts\VersionResolverInterface;
+use Kura\Contracts\VersionResolverInterface;
 use Symfony\Component\HttpFoundation\Response;
 
-class KatanaVersionMiddleware
+class KuraVersionMiddleware
 {
     private const HEADER = 'X-Reference-Version';
 

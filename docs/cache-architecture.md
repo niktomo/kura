@@ -8,6 +8,11 @@ Kura caches reference/master data in APCu and queries it via `ReferenceQueryBuil
 Data loading is performed through `LoaderInterface`, with Loader implementations in separate packages.
 
 > **This document is the implementation design specification.** For overall structure and usage, see `overview.md`.
+>
+> Related docs:
+> - [Version Management](version-management.md) — version drivers, middleware, deployment flow
+> - [Index Guide](index-guide.md) — index types, chunking, composite indexes, range queries
+> - [Query Recipes](query-recipes.md) — practical query patterns and examples
 
 ---
 

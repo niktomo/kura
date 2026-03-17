@@ -6,7 +6,7 @@
          cacheDirectory=".phpunit.cache"
          backupStaticProperties="false">
     <testsuites>
-        <testsuite name="Katana Test Suite">
+        <testsuite name="Kura Test Suite">
             <directory suffix="Test.php">./tests</directory>
         </testsuite>
     </testsuites>
