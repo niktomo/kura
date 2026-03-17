@@ -42,20 +42,31 @@ id,version,activated_at
 
 The version with `activated_at <= now()` and the latest timestamp is selected.
 
-Each table has its own directory with a data CSV per version (full snapshot, not diff):
+Each table has its own directory with a single `data.csv` file that includes a `version` column:
 
 ```
 data/
 ├── versions.csv
 ├── stations/
 │   ├── defines.csv
-│   ├── v1.0.0.csv
-│   └── v2.0.0.csv
+│   └── data.csv          # version column required
 └── lines/
     ├── defines.csv
-    ├── v1.0.0.csv
-    └── v2.0.0.csv
+    └── data.csv
 ```
+
+The CsvLoader reads `data.csv` and loads rows where `version = currentVersion` or `version IS NULL`. Rows with a null `version` are always loaded regardless of the active version — useful for records that do not change between versions.
+
+**data.csv example:**
+```csv
+id,name,prefecture,version
+1,Tokyo,Tokyo,
+2,Osaka,Osaka,
+3,Sapporo,Hokkaido,v1.0.0
+4,Fukuoka,Fukuoka,v2.0.0
+```
+
+In this example, rows 1 and 2 (version = null) are loaded for every version; rows 3 and 4 are version-specific.
 
 ### Database Driver
 

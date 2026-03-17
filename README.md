@@ -68,7 +68,7 @@ data/
 ├── versions.csv           # shared version registry
 └── stations/
     ├── defines.csv        # column definitions
-    └── v1.0.0.csv         # data snapshot (full dump per version)
+    └── data.csv           # data (version column required)
 ```
 
 **versions.csv** — controls which version is active:
@@ -79,7 +79,6 @@ id,version,activated_at
 ```
 
 The version with `activated_at <= now` and the latest timestamp is used.
-Each version's CSV is a **full snapshot** (not a diff).
 
 **stations/defines.csv** — column names and types:
 ```csv
@@ -91,19 +90,23 @@ city,string,City
 lat,float,Latitude
 lng,float,Longitude
 line_id,int,Railway line ID
+version,string,Data version (required)
 ```
 
 Supported types: `int`, `float`, `bool`, `string`
 
-**stations/v1.0.0.csv** — the actual data:
+**stations/data.csv** — the actual data, with a `version` column:
 ```csv
-id,name,prefecture,city,lat,lng,line_id
-1,Tokyo,Tokyo,Chiyoda,35.6812,139.7671,1
-2,Shibuya,Tokyo,Shibuya,35.6580,139.7016,1
-3,Shinjuku,Tokyo,Shinjuku,35.6896,139.7006,1
-4,Osaka,Osaka,Kita,34.7024,135.4959,2
-5,Namba,Osaka,Chuo,34.6629,135.5013,3
+id,name,prefecture,city,lat,lng,line_id,version
+1,Tokyo,Tokyo,Chiyoda,35.6812,139.7671,1,
+2,Shibuya,Tokyo,Shibuya,35.6580,139.7016,1,
+3,Shinjuku,Tokyo,Shinjuku,35.6896,139.7006,1,v1.0.0
+4,Osaka,Osaka,Kita,34.7024,135.4959,2,v1.0.0
+5,Namba,Osaka,Chuo,34.6629,135.5013,3,v1.0.0
 ```
+
+The CsvLoader loads rows where `version = currentVersion` **or** `version IS NULL`.
+Rows with a null `version` are always loaded regardless of the active version — use them for records shared across all versions.
 
 #### Option B: Database (Eloquent)
 

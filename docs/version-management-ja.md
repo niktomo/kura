@@ -42,20 +42,31 @@ id,version,activated_at
 
 `activated_at <= 現在時刻` の中で最も新しいバージョンが選択されます。
 
-各テーブルはディレクトリで管理し、バージョンごとにデータCSV（差分ではなく全件スナップショット）を用意します:
+各テーブルはディレクトリで管理し、`version` カラムを持つ単一の `data.csv` を用意します:
 
 ```
 data/
 ├── versions.csv
 ├── stations/
 │   ├── defines.csv
-│   ├── v1.0.0.csv
-│   └── v2.0.0.csv
+│   └── data.csv          # version カラム必須
 └── lines/
     ├── defines.csv
-    ├── v1.0.0.csv
-    └── v2.0.0.csv
+    └── data.csv
 ```
+
+CsvLoader は `version = 現在のバージョン` **または** `version が NULL` の行を読み込みます。`version` が NULL の行はバージョンに関わらず常にロードされる全バージョン共通データです。
+
+**data.csv の例:**
+```csv
+id,name,prefecture,version
+1,東京,Tokyo,
+2,大阪,Osaka,
+3,札幌,Hokkaido,v1.0.0
+4,福岡,Fukuoka,v2.0.0
+```
+
+この例では 1・2 行目（version = null）は全バージョンでロード、3・4 行目はバージョン固有のデータです。
 
 ### Database ドライバー
 

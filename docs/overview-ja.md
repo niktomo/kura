@@ -275,8 +275,7 @@ data/
 └── products/
     ├── defines.csv              column, type, description
     ├── indexes.csv              columns, unique
-    ├── v1.0.0.csv               データスナップショット（全件）
-    └── v1.1.0.csv               データスナップショット（全件）
+    └── data.csv                 version カラムありのデータ行
 ```
 
 ### versions.csv
@@ -288,7 +287,17 @@ id,version,activated_at
 ```
 
 `activated_at <= 現在時刻` の中で最も新しいバージョンが使われます。
-各バージョンのCSVは**差分ではなく全件スナップショット**です。
+
+### data.csv
+
+`data.csv` には `version` カラムが必須です。CsvLoader は `version = 現在のバージョン` または `version が NULL` の行を読み込みます。`version` が NULL の行は全バージョン共通データとして常にロードされます。
+
+```csv
+id,name,price,version
+1,商品A,9.99,
+2,商品B,19.99,v1.0.0
+3,商品C,29.99,v1.1.0
+```
 
 ### defines.csv
 

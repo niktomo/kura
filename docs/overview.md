@@ -275,8 +275,7 @@ data/
 └── products/
     ├── defines.csv              column, type, description
     ├── indexes.csv              columns, unique
-    ├── v1.0.0.csv               Data snapshot (full)
-    └── v1.1.0.csv               Data snapshot (full)
+    └── data.csv                 data rows with version column
 ```
 
 ### versions.csv
@@ -288,7 +287,17 @@ id,version,activated_at
 ```
 
 The most recent version where `activated_at <= current time` is used.
-Each version's CSV is a **full snapshot, not a diff**.
+
+### data.csv
+
+`data.csv` requires a `version` column. The CsvLoader loads rows where `version = currentVersion` or `version IS NULL`. Rows with a null `version` are always loaded (shared across all versions).
+
+```csv
+id,name,price,version
+1,Widget A,9.99,
+2,Widget B,19.99,v1.0.0
+3,Widget C,29.99,v1.1.0
+```
 
 ### defines.csv
 

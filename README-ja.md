@@ -68,7 +68,7 @@ data/
 ├── versions.csv           # 共通のバージョン管理
 └── stations/
     ├── defines.csv        # カラム定義
-    └── v1.0.0.csv         # データスナップショット（バージョンごとに全件）
+    └── data.csv           # データ本体（version カラム必須）
 ```
 
 **versions.csv** — アクティブなバージョンを制御:
@@ -79,7 +79,6 @@ id,version,activated_at
 ```
 
 `activated_at <= 現在時刻` で最も新しいバージョンが使われます。
-各バージョンの CSV は**差分ではなく全件スナップショット**です。
 
 **stations/defines.csv** — カラム名と型:
 ```csv
@@ -91,19 +90,23 @@ city,string,市区町村
 lat,float,緯度
 lng,float,経度
 line_id,int,路線ID
+version,string,データバージョン（必須）
 ```
 
 サポートする型: `int`, `float`, `bool`, `string`
 
-**stations/v1.0.0.csv** — データ本体:
+**stations/data.csv** — データ本体（`version` カラムあり）:
 ```csv
-id,name,prefecture,city,lat,lng,line_id
-1,東京,Tokyo,千代田区,35.6812,139.7671,1
-2,渋谷,Tokyo,渋谷区,35.6580,139.7016,1
-3,新宿,Tokyo,新宿区,35.6896,139.7006,1
-4,大阪,Osaka,北区,34.7024,135.4959,2
-5,なんば,Osaka,中央区,34.6629,135.5013,3
+id,name,prefecture,city,lat,lng,line_id,version
+1,東京,Tokyo,千代田区,35.6812,139.7671,1,
+2,渋谷,Tokyo,渋谷区,35.6580,139.7016,1,
+3,新宿,Tokyo,新宿区,35.6896,139.7006,1,v1.0.0
+4,大阪,Osaka,北区,34.7024,135.4959,2,v1.0.0
+5,なんば,Osaka,中央区,34.6629,135.5013,3,v1.0.0
 ```
+
+CsvLoader は `version = 現在のバージョン` **または** `version が NULL` の行を読み込みます。
+`version` が NULL の行は全バージョン共通データとして、バージョンに関わらず常にロードされます。
 
 #### パターン B: Database（Eloquent）
 
