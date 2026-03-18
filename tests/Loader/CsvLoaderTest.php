@@ -10,18 +10,15 @@ use PHPUnit\Framework\TestCase;
 /**
  * Unit tests (AAA format) for CsvLoader.
  *
- * Directory layout under a "table directory":
+ * Directory layout:
  *   {tableDir}/
- *     {version}.csv   — data snapshot for that version
- *     defines.csv     — column,type,description
- *     indexes.csv     — columns,unique
+ *     data.csv      — rows with a 'version' column
+ *     defines.csv   — column,type,description
  *
- * Global:
- *   versions.csv      — id,version,activated_at  (sibling of table dirs)
- *
- * CsvLoader resolves the active version via CsvVersionResolver, then
- * streams records from {tableDir}/{version}.csv as an associative array
- * generator, casting values according to defines.csv.
+ * Loading rule:
+ *   version IS NULL (empty)  → always loaded
+ *   version <= activeVersion → loaded
+ *   version > activeVersion  → skipped
  */
 class CsvLoaderTest extends TestCase
 {
@@ -86,60 +83,60 @@ class CsvLoaderTest extends TestCase
     }
 
     // =========================================================================
-    // Basic loading
+    // Version filtering
     // =========================================================================
 
-    public function test_load_yields_all_records_from_active_version_csv(): void
+    public function test_loads_rows_matching_active_version(): void
     {
         // Arrange
         $this->writeVersionsCsv([
-            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+            ['id' => 1, 'version' => 'v2.0.0', 'activated_at' => '2024-01-01 00:00:00'],
         ]);
-        $this->writeCsv(
-            $this->tmpDir.'/products/defines.csv',
+        $this->writeCsv($this->tmpDir.'/products/defines.csv',
             ['column', 'type', 'description'],
-            [['id', 'int', 'Primary key'], ['name', 'string', 'Product name'], ['price', 'int', 'Price']],
+            [['id', 'int', 'PK'], ['name', 'string', 'Name'], ['version', 'string', 'Ver']],
         );
-        $this->writeCsv(
-            $this->tmpDir.'/products/v1.0.0.csv',
-            ['id', 'name', 'price'],
-            [[1, 'Widget', 100], [2, 'Gadget', 250]],
-        );
-
-        $loader = new CsvLoader(
-            tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
-        );
-
-        // Act
-        $records = iterator_to_array($loader->load());
-
-        // Assert
-        $this->assertCount(2, $records);
-        $this->assertSame(['id' => 1, 'name' => 'Widget', 'price' => 100], $records[0]);
-        $this->assertSame(['id' => 2, 'name' => 'Gadget', 'price' => 250], $records[1]);
-    }
-
-    public function test_load_casts_types_according_to_defines(): void
-    {
-        // Arrange — CSV stores everything as strings; defines.csv specifies types
-        $this->writeVersionsCsv([
-            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
-        ]);
-        $this->writeCsv(
-            $this->tmpDir.'/products/defines.csv',
-            ['column', 'type', 'description'],
+        $this->writeCsv($this->tmpDir.'/products/data.csv',
+            ['id', 'name', 'version'],
             [
-                ['id',     'int',   'Primary key'],
-                ['name',   'string', 'Name'],
-                ['price',  'float', 'Price'],
-                ['active', 'bool',  'Is active'],
+                [1, 'Alpha', 'v1.0.0'],   // past — loaded
+                [2, 'Beta',  'v2.0.0'],   // current — loaded
+                [3, 'Gamma', 'v3.0.0'],   // future — skipped
             ],
         );
-        $this->writeCsv(
-            $this->tmpDir.'/products/v1.0.0.csv',
-            ['id', 'name', 'price', 'active'],
-            [['1', 'Widget', '9.99', '1']],
+
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+        );
+
+        // Act
+        $records = iterator_to_array($loader->load(), false);
+
+        // Assert — past + current loaded, future skipped
+        $this->assertCount(2, $records);
+        $names = array_column($records, 'name');
+        $this->assertSame(['Alpha', 'Beta'], $names);
+    }
+
+    public function test_null_version_rows_are_always_loaded(): void
+    {
+        // Arrange
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+        ]);
+        $this->writeCsv($this->tmpDir.'/products/defines.csv',
+            ['column', 'type', 'description'],
+            [['id', 'int', 'PK'], ['name', 'string', 'Name'], ['version', 'string', 'Ver']],
+        );
+        $this->writeCsv($this->tmpDir.'/products/data.csv',
+            ['id', 'name', 'version'],
+            [
+                [1, 'Shared A', ''],         // null version — always loaded
+                [2, 'Shared B', ''],         // null version — always loaded
+                [3, 'Versioned', 'v1.0.0'],  // current — loaded
+                [4, 'Future',    'v2.0.0'],  // future — skipped
+            ],
         );
 
         $loader = new CsvLoader(
@@ -148,37 +145,32 @@ class CsvLoaderTest extends TestCase
         );
 
         // Act
-        $records = iterator_to_array($loader->load());
+        $records = iterator_to_array($loader->load(), false);
 
-        // Assert
-        $record = $records[0];
-        $this->assertSame(1, $record['id']);
-        $this->assertSame('Widget', $record['name']);
-        $this->assertSame(9.99, $record['price']);
-        $this->assertTrue($record['active']);
+        // Assert — null rows + current loaded; future skipped
+        $this->assertCount(3, $records);
+        $names = array_column($records, 'name');
+        $this->assertSame(['Shared A', 'Shared B', 'Versioned'], $names);
     }
 
-    public function test_load_uses_later_version_when_available(): void
+    public function test_active_version_is_the_latest_activated_one(): void
     {
-        // Arrange
+        // Arrange — two versions registered; v1.1.0 is the active one at query time
         $this->writeVersionsCsv([
             ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
             ['id' => 2, 'version' => 'v1.1.0', 'activated_at' => '2024-06-01 00:00:00'],
         ]);
-        $this->writeCsv(
-            $this->tmpDir.'/products/defines.csv',
+        $this->writeCsv($this->tmpDir.'/products/defines.csv',
             ['column', 'type', 'description'],
-            [['id', 'int', 'Primary key'], ['name', 'string', 'Name']],
+            [['id', 'int', 'PK'], ['name', 'string', 'Name'], ['version', 'string', 'Ver']],
         );
-        $this->writeCsv(
-            $this->tmpDir.'/products/v1.0.0.csv',
-            ['id', 'name'],
-            [[1, 'Old Widget']],
-        );
-        $this->writeCsv(
-            $this->tmpDir.'/products/v1.1.0.csv',
-            ['id', 'name'],
-            [[1, 'New Widget'], [2, 'Gadget']],
+        $this->writeCsv($this->tmpDir.'/products/data.csv',
+            ['id', 'name', 'version'],
+            [
+                [1, 'Old Widget', 'v1.0.0'],   // past — loaded
+                [2, 'New Widget', 'v1.1.0'],   // current — loaded
+                [3, 'Next',       'v2.0.0'],   // future — skipped
+            ],
         );
 
         $loader = new CsvLoader(
@@ -187,49 +179,38 @@ class CsvLoaderTest extends TestCase
         );
 
         // Act
-        $records = iterator_to_array($loader->load());
+        $records = iterator_to_array($loader->load(), false);
 
-        // Assert — v1.1.0 loaded (full snapshot, not diff)
+        // Assert — v1.0.0 (past) + v1.1.0 (current) loaded
         $this->assertCount(2, $records);
-        $this->assertSame('New Widget', $records[0]['name']);
+        $names = array_column($records, 'name');
+        $this->assertSame(['Old Widget', 'New Widget'], $names);
     }
 
-    public function test_load_yields_nothing_when_no_version_is_active(): void
+    // =========================================================================
+    // Type casting
+    // =========================================================================
+
+    public function test_casts_types_according_to_defines(): void
     {
-        // Arrange — version starts in the future
-        $this->writeVersionsCsv([
-            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2025-01-01 00:00:00'],
-        ]);
-        $this->writeCsv(
-            $this->tmpDir.'/products/defines.csv',
-            ['column', 'type', 'description'],
-            [['id', 'int', 'Primary key']],
-        );
-
-        $loader = new CsvLoader(
-            tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-01-01')),
-        );
-
-        // Act
-        $records = iterator_to_array($loader->load());
-
-        // Assert
-        $this->assertCount(0, $records);
-    }
-
-    public function test_load_yields_nothing_when_data_csv_is_missing(): void
-    {
-        // Arrange — version resolved but matching data file does not exist
+        // Arrange
         $this->writeVersionsCsv([
             ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
         ]);
-        $this->writeCsv(
-            $this->tmpDir.'/products/defines.csv',
+        $this->writeCsv($this->tmpDir.'/products/defines.csv',
             ['column', 'type', 'description'],
-            [['id', 'int', 'Primary key']],
+            [
+                ['id',      'int',    'PK'],
+                ['price',   'float',  'Price'],
+                ['active',  'bool',   'Active'],
+                ['name',    'string', 'Name'],
+                ['version', 'string', 'Ver'],
+            ],
         );
-        // v1.0.0.csv intentionally not created
+        $this->writeCsv($this->tmpDir.'/products/data.csv',
+            ['id', 'price', 'active', 'name', 'version'],
+            [['1', '9.99', '1', 'Widget', 'v1.0.0']],
+        );
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
@@ -237,10 +218,109 @@ class CsvLoaderTest extends TestCase
         );
 
         // Act
-        $records = iterator_to_array($loader->load());
+        $record = iterator_to_array($loader->load(), false)[0];
 
         // Assert
-        $this->assertCount(0, $records);
+        $this->assertSame(1, $record['id']);
+        $this->assertSame(9.99, $record['price']);
+        $this->assertTrue($record['active']);
+        $this->assertSame('Widget', $record['name']);
+    }
+
+    public function test_empty_field_becomes_null(): void
+    {
+        // Arrange
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+        ]);
+        $this->writeCsv($this->tmpDir.'/products/defines.csv',
+            ['column', 'type', 'description'],
+            [['id', 'int', 'PK'], ['note', 'string', 'Note'], ['version', 'string', 'Ver']],
+        );
+        $this->writeCsv($this->tmpDir.'/products/data.csv',
+            ['id', 'note', 'version'],
+            [[1, '', 'v1.0.0']],
+        );
+
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+        );
+
+        // Act
+        $record = iterator_to_array($loader->load(), false)[0];
+
+        // Assert
+        $this->assertNull($record['note'], 'Empty CSV field should become null');
+    }
+
+    // =========================================================================
+    // Edge cases
+    // =========================================================================
+
+    public function test_yields_nothing_when_no_version_is_active(): void
+    {
+        // Arrange — version starts in the future
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2025-01-01 00:00:00'],
+        ]);
+        $this->writeCsv($this->tmpDir.'/products/defines.csv',
+            ['column', 'type', 'description'],
+            [['id', 'int', 'PK'], ['version', 'string', 'Ver']],
+        );
+
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-01-01')),
+        );
+
+        // Act / Assert
+        $this->assertCount(0, iterator_to_array($loader->load(), false));
+    }
+
+    public function test_yields_nothing_when_data_csv_is_missing(): void
+    {
+        // Arrange — version resolved but data.csv does not exist
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+        ]);
+        $this->writeCsv($this->tmpDir.'/products/defines.csv',
+            ['column', 'type', 'description'],
+            [['id', 'int', 'PK']],
+        );
+        // data.csv intentionally not created
+
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+        );
+
+        // Act / Assert
+        $this->assertCount(0, iterator_to_array($loader->load(), false));
+    }
+
+    public function test_yields_nothing_when_version_column_is_absent(): void
+    {
+        // Arrange — data.csv has no version column
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+        ]);
+        $this->writeCsv($this->tmpDir.'/products/defines.csv',
+            ['column', 'type', 'description'],
+            [['id', 'int', 'PK']],
+        );
+        $this->writeCsv($this->tmpDir.'/products/data.csv',
+            ['id', 'name'],   // no version column
+            [[1, 'Widget']],
+        );
+
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+        );
+
+        // Act / Assert — version column required
+        $this->assertCount(0, iterator_to_array($loader->load(), false));
     }
 
     public function test_load_is_a_generator(): void
@@ -249,15 +329,13 @@ class CsvLoaderTest extends TestCase
         $this->writeVersionsCsv([
             ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
         ]);
-        $this->writeCsv(
-            $this->tmpDir.'/products/defines.csv',
+        $this->writeCsv($this->tmpDir.'/products/defines.csv',
             ['column', 'type', 'description'],
-            [['id', 'int', 'Primary key']],
+            [['id', 'int', 'PK'], ['version', 'string', 'Ver']],
         );
-        $this->writeCsv(
-            $this->tmpDir.'/products/v1.0.0.csv',
-            ['id'],
-            [[1]],
+        $this->writeCsv($this->tmpDir.'/products/data.csv',
+            ['id', 'version'],
+            [[1, 'v1.0.0']],
         );
 
         $loader = new CsvLoader(

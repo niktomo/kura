@@ -3,17 +3,19 @@
 namespace Kura\Loader;
 
 /**
- * Loads records from a versioned CSV snapshot.
+ * Loads records from a single data.csv file with version-based filtering.
  *
  * Directory layout:
  *   {tableDirectory}/
- *     defines.csv         — column,type,description
- *     {version}.csv       — data snapshot for that version
+ *     data.csv      — all rows with a 'version' column
+ *     defines.csv   — column,type,description
  *
- * The active version is resolved by CsvVersionResolver.
- * Column types declared in defines.csv are applied to every record.
+ * Loading rule:
+ *   version IS NULL (empty)  → always loaded (shared across all versions)
+ *   version <= activeVersion → loaded (current and past version rows)
+ *   version > activeVersion  → skipped (future version rows not yet active)
  *
- * Supported types: int, float, bool, string (default)
+ * Supported column types: int, float, bool, string (default)
  */
 final class CsvLoader implements LoaderInterface
 {
@@ -24,6 +26,7 @@ final class CsvLoader implements LoaderInterface
         private readonly string $tableDirectory,
         private readonly CsvVersionResolver $resolver,
         private readonly array $indexDefinitions = [],
+        private readonly string $versionColumn = 'version',
     ) {}
 
     /**
@@ -31,12 +34,12 @@ final class CsvLoader implements LoaderInterface
      */
     public function load(): \Generator
     {
-        $version = $this->resolver->resolveVersion();
-        if ($version === null) {
+        $activeVersion = $this->resolver->resolveVersion();
+        if ($activeVersion === null) {
             return;
         }
 
-        $dataFile = $this->tableDirectory.'/'.$version.'.csv';
+        $dataFile = $this->tableDirectory.'/data.csv';
         if (! file_exists($dataFile)) {
             return;
         }
@@ -54,13 +57,28 @@ final class CsvLoader implements LoaderInterface
                 return;
             }
 
+            $versionIndex = array_search($this->versionColumn, $headers, true);
+            if ($versionIndex === false) {
+                return;
+            }
+
             $index = 0;
             while (($row = fgetcsv($fp, escape: '')) !== false) {
+                $rowVersion = isset($row[$versionIndex]) && $row[$versionIndex] !== ''
+                    ? $row[$versionIndex]
+                    : null;
+
+                // Skip rows whose version is set and greater than the active version
+                if ($rowVersion !== null && version_compare($rowVersion, $activeVersion, '>')) {
+                    continue;
+                }
+
                 $record = [];
                 foreach ($headers as $i => $column) {
-                    $value = $row[$i] ?? null;
+                    $value = isset($row[$i]) && $row[$i] !== '' ? $row[$i] : null;
                     $record[$column] = $this->cast($value, $types[$column] ?? 'string');
                 }
+
                 yield $index++ => $record;
             }
         } finally {
@@ -100,8 +118,7 @@ final class CsvLoader implements LoaderInterface
             return [];
         }
 
-        // Skip header
-        fgetcsv($fp, escape: '');
+        fgetcsv($fp, escape: ''); // Skip header
 
         $types = [];
         while (($row = fgetcsv($fp, escape: '')) !== false) {
