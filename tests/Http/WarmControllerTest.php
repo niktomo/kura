@@ -2,6 +2,8 @@
 
 namespace Kura\Tests\Http;
 
+use Illuminate\Support\Facades\Bus;
+use Kura\Jobs\RebuildCacheJob;
 use Kura\KuraManager;
 use Kura\KuraServiceProvider;
 use Kura\Store\ArrayStore;
@@ -164,6 +166,83 @@ class WarmControllerTest extends TestCase
         /** @var string $path */
         $path = $this->app['config']->get('kura.warm.path');
         $this->assertSame('custom/warm', $path, 'Custom path should be configurable');
+    }
+
+    // =========================================================================
+    // Queue strategy — Bus::batch() dispatch
+    // =========================================================================
+
+    public function test_warm_dispatches_batch_job_per_table_when_strategy_is_queue(): void
+    {
+        // Given: rebuild strategy = queue
+        Bus::fake();
+        assert($this->app !== null);
+        $this->app['config']->set('kura.rebuild.strategy', 'queue');
+
+        // When: POST /kura/warm
+        $response = $this->postJson('/kura/warm', [], [
+            'Authorization' => 'Bearer test-secret-token',
+        ]);
+
+        // Then: 202 Accepted with batch_id
+        $response->assertStatus(202);
+        $response->assertJsonStructure(['message', 'batch_id', 'tables']);
+        $response->assertJsonPath('message', 'Rebuild dispatched.');
+        $response->assertJsonPath('tables.products.status', 'dispatched');
+
+        Bus::assertBatched(function (\Illuminate\Bus\PendingBatch $batch): bool {
+            return count($batch->jobs) === 1
+                && $batch->jobs[0] instanceof RebuildCacheJob
+                && $batch->jobs[0]->table === 'products';
+        });
+    }
+
+    public function test_warm_queue_strategy_includes_version_in_each_job(): void
+    {
+        // Given: rebuild strategy = queue, version override requested
+        Bus::fake();
+        assert($this->app !== null);
+        $this->app['config']->set('kura.rebuild.strategy', 'queue');
+
+        // When: POST /kura/warm?version=v2.0.0
+        $response = $this->postJson('/kura/warm?version=v2.0.0', [], [
+            'Authorization' => 'Bearer test-secret-token',
+        ]);
+
+        // Then: 202 and dispatched job carries the version
+        $response->assertStatus(202);
+
+        Bus::assertBatched(function (\Illuminate\Bus\PendingBatch $batch): bool {
+            return $batch->jobs[0] instanceof RebuildCacheJob
+                && $batch->jobs[0]->version === 'v2.0.0';
+        });
+    }
+
+    public function test_warm_queue_strategy_dispatches_one_job_per_registered_table(): void
+    {
+        // Given: two tables registered, strategy = queue
+        Bus::fake();
+        assert($this->app !== null);
+        $this->app['config']->set('kura.rebuild.strategy', 'queue');
+
+        /** @var KuraManager $manager */
+        $manager = $this->app->make(KuraManager::class);
+        $manager->register('categories', new InMemoryLoader(
+            records: [['id' => 1, 'name' => 'Electronics']],
+            columns: ['id' => 'int', 'name' => 'string'],
+        ));
+
+        // When: POST /kura/warm (no tables filter = all)
+        $response = $this->postJson('/kura/warm', [], [
+            'Authorization' => 'Bearer test-secret-token',
+        ]);
+
+        // Then: 202 and batch has 2 jobs (products + categories)
+        $response->assertStatus(202);
+
+        Bus::assertBatched(function (\Illuminate\Bus\PendingBatch $batch): bool {
+            return count($batch->jobs) === 2;
+        });
     }
 
     // =========================================================================

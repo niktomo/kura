@@ -20,10 +20,15 @@ class RebuildCacheJob implements ShouldQueue
 
     public function __construct(
         public readonly string $table,
+        public readonly ?string $version = null,
     ) {}
 
     public function handle(KuraManager $manager): void
     {
+        if ($this->version !== null) {
+            $manager->setVersionOverride($this->version);
+        }
+
         $manager->rebuild($this->table);
     }
 }

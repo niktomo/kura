@@ -90,6 +90,68 @@ class RebuildCacheJobTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
+    // Version override
+    // -------------------------------------------------------------------------
+
+    public function test_version_defaults_to_null(): void
+    {
+        // Arrange & Act
+        $job = new RebuildCacheJob('products');
+
+        // Assert
+        $this->assertNull($job->version, 'version should default to null');
+    }
+
+    public function test_handle_applies_version_override_when_set(): void
+    {
+        // Arrange
+        $store = new ArrayStore;
+        $manager = new KuraManager(store: $store);
+        $manager->register('products', new InMemoryLoader([
+            ['id' => 1, 'name' => 'Widget'],
+        ]));
+
+        $job = new RebuildCacheJob('products', 'v2.0.0');
+
+        // Act
+        $job->handle($manager);
+
+        // Assert
+        $ids = $store->getIds('products', 'v2.0.0');
+        $this->assertIsArray(
+            $ids,
+            'handle() should rebuild under the overridden version key',
+        );
+        $this->assertSame(
+            [1],
+            $ids,
+            'Records should be cached under v2.0.0 when version override is set',
+        );
+    }
+
+    public function test_handle_does_not_set_version_when_null(): void
+    {
+        // Arrange
+        $store = new ArrayStore;
+        $manager = new KuraManager(store: $store);
+        $manager->register('products', new InMemoryLoader([
+            ['id' => 1, 'name' => 'Widget'],
+        ]));
+
+        $job = new RebuildCacheJob('products');  // version = null
+
+        // Act
+        $job->handle($manager);
+
+        // Assert: rebuilt under the loader's default version ('v1')
+        $ids = $store->getIds('products', 'v1');
+        $this->assertIsArray(
+            $ids,
+            'Without version override, records should be cached under loader\'s version',
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // Queue configuration
     // -------------------------------------------------------------------------
 

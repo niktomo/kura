@@ -822,6 +822,102 @@ Queue:      任意
 
 ---
 
+## Warm エンドポイント
+
+`POST /kura/warm` は登録済みテーブル（または指定したテーブル）の APCu キャッシュを再構築する。
+デプロイ後にトラフィックが来る前に事前ウォームアップするのに使う。
+
+`config/kura.php` で有効化:
+
+```php
+'warm' => [
+    'enabled' => true,
+    'token'   => env('KURA_WARM_TOKEN', ''),  // Bearer トークン（必須）
+    'path'    => 'kura/warm',                  // URL パス
+],
+```
+
+### リクエスト
+
+```
+POST /kura/warm
+Authorization: Bearer {KURA_WARM_TOKEN}
+
+クエリパラメーター:
+  tables  — カンマ区切りのテーブル名（省略 = 全登録テーブル）
+  version — バージョンオーバーライド（例: v2.0.0）
+```
+
+### Strategy 別の挙動
+
+#### strategy: sync
+
+全テーブルを同一リクエスト内で直列 rebuild。全完了後に返す。
+
+```
+POST /kura/warm
+  │
+  ├─ rebuild stations  ┐
+  ├─ rebuild lines     ├ 直列、同一リクエスト内
+  └─ rebuild products  ┘
+  │
+  └─ 200 OK
+     {
+       "message": "All tables warmed.",
+       "tables": {
+         "stations": {"status": "ok", "version": "v1.0.0"},
+         "lines":    {"status": "ok", "version": "v1.0.0"}
+       }
+     }
+```
+
+#### strategy: queue ⭐ 本番推奨
+
+テーブルごとに `RebuildCacheJob` を **Bus batch** として dispatch。即時返却（202）。
+Queue ワーカーがテーブルを並列処理する。
+
+```
+POST /kura/warm
+  │
+  ├─ Bus::batch([StationsJob, LinesJob, ProductsJob])->dispatch()
+  └─ 202 Accepted（即時返却）
+     {
+       "message": "Rebuild dispatched.",
+       "batch_id": "550e8400-e29b-41d4-a716-446655440000",
+       "tables": {
+         "stations": {"status": "dispatched", "version": "v1.0.0"},
+         "lines":    {"status": "dispatched", "version": "v1.0.0"}
+       }
+     }
+
+  [Queue ワーカー — 並列]
+    Worker 1: RebuildCacheJob(stations) → rebuild
+    Worker 2: RebuildCacheJob(lines)    → rebuild
+    Worker 3: RebuildCacheJob(products) → rebuild
+```
+
+### batch_id について
+
+`batch_id` は `Bus::batch()->dispatch()` 時に Laravel が自動生成する UUID。
+`job_batches` テーブルに保存されており、進捗確認が可能:
+
+```php
+$batch = Bus::findBatch($batchId);
+$batch->totalJobs;    // 全ジョブ数
+$batch->pendingJobs;  // 残り
+$batch->failedJobs;   // 失敗数
+$batch->finished();   // bool
+```
+
+**必要なマイグレーション**（`strategy: queue` を使う場合のみ）:
+
+```bash
+php artisan queue:batches-table
+php artisan migrate
+```
+
+このマイグレーションがないと `Bus::batch()->dispatch()` がエラーになる。
+
 ---
 
 ## TTL
