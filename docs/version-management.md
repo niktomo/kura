@@ -244,6 +244,70 @@ Register it in `bootstrap/app.php`:
 
 ---
 
+## Client Version Strategy
+
+How clients hold and track the active version. Choose based on how often data changes and whether schema changes are involved.
+
+### Pattern A — Embed at build time
+
+```
+CI/CD build
+  └─ Fetch current version (e.g. v2.0.0) from versions.csv or API
+  └─ Embed into app binary at build time
+
+Client (mobile app / SPA bundle)
+  └─ Always sends: X-Reference-Version: v2.0.0 (fixed)
+  └─ Receives X-Reference-Version-Mismatch: true
+       └─ Prompt user to update the app
+```
+
+**Best for:** Changes that involve schema or UI updates (new columns, removed fields). Version bump = app release. Safe and predictable.
+
+---
+
+### Pattern B — Fetch at startup or on mismatch ⭐ recommended
+
+```
+App startup
+  └─ GET /api/version  →  "v2.0.0"
+  └─ Store version in memory / local storage
+
+Each request
+  └─ Send: X-Reference-Version: v2.0.0
+  └─ Receive: X-Reference-Version: v3.0.0  (server moved on)
+            + X-Reference-Version-Mismatch: true
+       └─ Re-fetch version → update to v3.0.0
+       └─ Retry request with new version (no app update needed)
+```
+
+**Best for:** Data-only changes (new rows, value updates) with no schema change. Clients adapt automatically without a release.
+
+---
+
+### Pattern C — App version tied to data version
+
+```
+Data version v3.0.0 released
+  └─ App v3.0 is also released (schema/UI changes bundled together)
+  └─ Users on app v2.x receive X-Reference-Version-Mismatch
+       └─ Force-upgrade prompt
+```
+
+**Best for:** Tightly coupled data and UI (e.g. new data fields require new screens).
+
+---
+
+### Choosing a pattern
+
+| | Pattern A | Pattern B | Pattern C |
+|---|---|---|---|
+| Data-only updates | App rebuild needed | ✅ Automatic | App rebuild needed |
+| Schema/UI updates | ✅ Controlled via release | Manual handling needed | ✅ Controlled via release |
+| Operational simplicity | High | Medium | High |
+| Recommended for | Static reference data | Frequently updated data | Tightly coupled app+data |
+
+---
+
 ## Config Reference
 
 ```php
