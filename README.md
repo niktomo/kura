@@ -105,8 +105,7 @@ id,name,prefecture,city,lat,lng,line_id,version
 5,Namba,Osaka,Chuo,34.6629,135.5013,3,v1.0.0
 ```
 
-The CsvLoader loads rows where `version = currentVersion` **or** `version IS NULL`.
-Rows with a null `version` are always loaded regardless of the active version — use them for records shared across all versions.
+The CsvLoader loads rows where `version IS NULL` (always loaded, shared across all versions) or `version <= currentVersion` (past and current versions). Rows where `version > currentVersion` are skipped (future versions not yet active).
 
 #### Option B: Database (Eloquent)
 

@@ -44,7 +44,7 @@ ReferenceQueryBuilderInterface extends BuilderContract
             │         └─ 別パッケージで実装（CsvLoader, EloquentLoader 等）
             │
             └─ RecordCursor
-                 generator ベースのレコード走査 + 条件評価
+                 generator ベースのレコード走査。条件評価は WhereEvaluator に委譲
 ```
 
 ### 設計方針

@@ -55,7 +55,7 @@ data/
     └── data.csv
 ```
 
-CsvLoader は `version = 現在のバージョン` **または** `version が NULL` の行を読み込みます。`version` が NULL の行はバージョンに関わらず常にロードされる全バージョン共通データです。
+CsvLoader は `version が NULL`（全バージョン共通データとして常にロード）または `version <= 現在のバージョン`（過去・現在のバージョン行）を読み込みます。`version > 現在のバージョン` の行はスキップされます（まだアクティブでない未来のデータ）。
 
 **data.csv の例:**
 ```csv
@@ -66,7 +66,7 @@ id,name,prefecture,version
 4,福岡,Fukuoka,v2.0.0
 ```
 
-この例では 1・2 行目（version = null）は全バージョンでロード、3・4 行目はバージョン固有のデータです。
+この例では 1・2 行目（version = null）は全バージョンでロード。3 行目（v1.0.0）は activeVersion >= v1.0.0 のときにロード。4 行目（v2.0.0）は activeVersion >= v2.0.0 のときにロードされ、activeVersion = v1.0.0 ではスキップされます。
 
 ### Database ドライバー
 

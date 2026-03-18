@@ -44,7 +44,7 @@ ReferenceQueryBuilderInterface extends BuilderContract
             │         └─ Implemented in separate packages (CsvLoader, EloquentLoader, etc.)
             │
             └─ RecordCursor
-                 Generator-based record traversal + condition evaluation
+                 Generator-based record traversal; delegates condition evaluation to WhereEvaluator
 ```
 
 ### Design Principles

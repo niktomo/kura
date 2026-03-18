@@ -55,7 +55,7 @@ data/
     └── data.csv
 ```
 
-The CsvLoader reads `data.csv` and loads rows where `version = currentVersion` or `version IS NULL`. Rows with a null `version` are always loaded regardless of the active version — useful for records that do not change between versions.
+The CsvLoader reads `data.csv` and loads rows where `version IS NULL` (always loaded, shared across all versions) or `version <= currentVersion` (past and current versions). Rows where `version > currentVersion` are skipped — they represent data not yet active.
 
 **data.csv example:**
 ```csv
@@ -66,7 +66,7 @@ id,name,prefecture,version
 4,Fukuoka,Fukuoka,v2.0.0
 ```
 
-In this example, rows 1 and 2 (version = null) are loaded for every version; rows 3 and 4 are version-specific.
+In this example, rows 1 and 2 (version = null) are loaded for every version. Row 3 (v1.0.0) is loaded when activeVersion >= v1.0.0. Row 4 (v2.0.0) is loaded when activeVersion >= v2.0.0, and skipped when activeVersion = v1.0.0.
 
 ### Database Driver
 

@@ -105,8 +105,7 @@ id,name,prefecture,city,lat,lng,line_id,version
 5,なんば,Osaka,中央区,34.6629,135.5013,3,v1.0.0
 ```
 
-CsvLoader は `version = 現在のバージョン` **または** `version が NULL` の行を読み込みます。
-`version` が NULL の行は全バージョン共通データとして、バージョンに関わらず常にロードされます。
+CsvLoader は `version が NULL`（全バージョン共通データとして常にロード）または `version <= 現在のバージョン`（過去・現在のバージョン行）を読み込みます。`version > 現在のバージョン` の行はスキップされます（未来のバージョン）。
 
 #### パターン B: Database（Eloquent）
 
