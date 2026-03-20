@@ -9,8 +9,3 @@ COPY .docker/php.ini /usr/local/etc/php/conf.d/kura.ini
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /app
-
-COPY composer.json ./
-RUN composer install --no-interaction --prefer-dist --ignore-platform-req=ext-apcu
-
-COPY . .

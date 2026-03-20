@@ -31,12 +31,21 @@ return [
     /*
      * Rebuild strategy.
      *
-     * 'sync'     — synchronous rebuild (no queue needed)
-     * 'queue'    — async rebuild via queue job
-     * 'callback' — custom callback (register via ServiceProvider)
+     * 'sync'     — synchronous rebuild in the current request (no queue needed)
+     * 'queue'    — async rebuild via Laravel queue job (RebuildCacheJob)
+     * 'callback' — custom callable; must set 'callback' below
+     *
+     * callback signature: callable(\Kura\CacheRepository $repository): void
+     *
+     * Example:
+     *   'strategy' => 'callback',
+     *   'callback' => static function (\Kura\CacheRepository $repository): void {
+     *       dispatch(new \App\Jobs\WarmKuraTableJob($repository->table()));
+     *   },
      */
     'rebuild' => [
         'strategy' => 'sync',
+        'callback' => null,  // required when strategy = 'callback'
         'queue' => [
             'connection' => null,
             'queue' => null,

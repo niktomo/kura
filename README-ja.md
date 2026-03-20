@@ -59,7 +59,7 @@ return [
 
     // Rebuild 戦略 — キャッシュが消えたときの動作
     'rebuild' => [
-        'strategy' => 'sync',  // 'sync'（Queue 不要）or 'queue'（本番推奨）
+        'strategy' => 'sync',  // 'sync' | 'queue'（本番推奨）| 'callback'
     ],
 ];
 ```
@@ -320,6 +320,7 @@ APCu がキャッシュデータを evict しても、Kura はクエリ時に欠
 ```
 
 `rebuild.strategy = 'queue'` にすると、rebuild は非同期で実行 — 現在のリクエストは Loader から直接データを取得し、バックグラウンドでキャッシュが再構築されます。
+`rebuild.strategy = 'callback'` を使うと独自の callable を指定できます（例: Horizon 優先キューへのディスパッチ）。詳細は [Cache Architecture](docs/cache-architecture-ja.md) を参照。
 
 ---
 
@@ -368,22 +369,22 @@ Kura は Laravel QueryBuilder の約99メソッドを実装しています。完
 
 ## ベンチマーク
 
-Apple M4 Pro / PHP 8.4.19 / APCu 5.1.28（`apc.shm_size=256M`）で計測。
+Apple M4 Pro / PHP 8.4.19 / APCu 5.1.28（`apc.shm_size=256M`）、Docker（linux/arm64）で計測。
 各シナリオ 500 イテレーション、p95 レイテンシを掲載。
 
 | シナリオ | 1K件 | 10K件 | 100K件 |
 |---|---|---|---|
-| `find($id)` — 1件取得 | **0.9 µs** | **0.8 µs** | **0.9 µs** |
-| `where('country','JP')` — インデックス `=` | **139 µs** | **1.3 ms** | **16 ms** |
-| `where('country','JP')->where('category','...')` — composite index | **105 µs** | **984 µs** | **11 ms** |
-| `whereBetween('price', [50,100])` — 範囲インデックス | **181 µs** | **1.7 ms** | **18 ms** |
-| `where(...)->orderBy('price')->get()` — インデックスウォーク | **190 µs** | **1.7 ms** | **21 ms** |
-| `where('active', true)` — 非インデックス（全走査） | 477 µs | 4.8 ms | 52 ms |
-| `get()` — 全件取得 | 379 µs | 3.7 ms | 40 ms |
-| キャッシュ構築（`rebuild()`） | 3.9 ms | 11.8 ms | 115 ms |
+| `find($id)` — 1件取得 | **0.9 µs** | **0.9 µs** | **0.9 µs** |
+| `where('country','JP')` — インデックス `=` | **134 µs** | **1.2 ms** | **15 ms** |
+| `where('country','JP')->where('category','...')` — composite index | **104 µs** | **936 µs** | **11 ms** |
+| `whereBetween('price', [50,100])` — 範囲インデックス | **182 µs** | **1.5 ms** | **17 ms** |
+| `where(...)->orderBy('price')->get()` — インデックスウォーク | **182 µs** | **1.6 ms** | **19 ms** |
+| `where('active', true)` — 非インデックス（全走査） | 460 µs | 4.5 ms | 49 ms |
+| `get()` — 全件取得 | 364 µs | 3.5 ms | 37 ms |
+| キャッシュ構築（`rebuild()`） | 2.9 ms | 11.3 ms | 114 ms |
 
 インデックスを活用するクエリ（**太字**）は全走査より 3〜5倍高速。
-100K件でも、インデックスありなら 21 ms 以下で応答します。
+100K件でも、インデックスありなら 19 ms 以下で応答します。
 `orderBy` にインデックス列を指定すると、APCu に保存済みのソート済みインデックスをそのまま走査（インデックスウォーク）— PHP ソート不要。
 
 > Docker 環境で `php benchmarks/benchmark.php` を実行して再現できます。

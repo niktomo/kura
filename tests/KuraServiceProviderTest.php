@@ -223,6 +223,63 @@ class KuraServiceProviderTest extends TestCase
         rmdir($dir);
     }
 
+    // -------------------------------------------------------------------------
+    // Rebuild strategy: callback
+    // -------------------------------------------------------------------------
+
+    public function test_callback_strategy_invokes_callable_on_self_healing(): void
+    {
+        // Arrange: callback is invoked by CacheProcessor::dispatchRebuild() when cache is empty
+        $called = false;
+        $store = new \Kura\Store\ArrayStore;
+        $loader = new \Kura\Tests\Support\InMemoryLoader([['id' => 1, 'name' => 'A']]);
+
+        $repository = new \Kura\CacheRepository(
+            table: 'items',
+            primaryKey: 'id',
+            store: $store,
+            loader: $loader,
+        );
+
+        $dispatcher = static function () use (&$called): void {
+            $called = true;
+        };
+
+        $processor = new \Kura\CacheProcessor(
+            repository: $repository,
+            store: $store,
+            rebuildDispatcher: \Closure::fromCallable($dispatcher),
+        );
+
+        $builder = new \Kura\ReferenceQueryBuilder(
+            table: 'items',
+            repository: $repository,
+            processor: $processor,
+        );
+
+        // Act: query without prior rebuild — triggers self-healing → dispatchRebuild()
+        $builder->get();
+
+        // Assert
+        $this->assertTrue($called, 'callback strategy should invoke the dispatcher on self-healing');
+    }
+
+    public function test_callback_strategy_throws_when_callback_not_set(): void
+    {
+        // Arrange
+        assert($this->app !== null);
+
+        $this->app['config']->set('kura.rebuild.strategy', 'callback');
+        $this->app['config']->set('kura.rebuild.callback', null);
+
+        $this->app->forgetInstance(KuraManager::class);
+        (new KuraServiceProvider($this->app))->register();
+
+        // Act & Assert — exception thrown when KuraManager is resolved
+        $this->expectException(\InvalidArgumentException::class);
+        $this->app->make(KuraManager::class);
+    }
+
     public function test_version_resolver_is_bound(): void
     {
         assert($this->app !== null);

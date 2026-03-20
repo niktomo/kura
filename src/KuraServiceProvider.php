@@ -210,6 +210,19 @@ class KuraServiceProvider extends ServiceProvider
         /** @var string $strategy */
         $strategy = $config->get('kura.rebuild.strategy', 'sync');
 
+        if ($strategy === 'callback') {
+            /** @var callable(CacheRepository): void|null $callback */
+            $callback = $config->get('kura.rebuild.callback');
+
+            if ($callback === null) {
+                throw new \InvalidArgumentException(
+                    "kura.rebuild.strategy is 'callback' but kura.rebuild.callback is not set.",
+                );
+            }
+
+            return \Closure::fromCallable($callback);
+        }
+
         if ($strategy !== 'queue') {
             return null;
         }

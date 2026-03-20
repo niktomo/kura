@@ -59,7 +59,7 @@ return [
 
     // Rebuild strategy — what happens when cache is missing
     'rebuild' => [
-        'strategy' => 'sync',  // 'sync' (no queue needed) or 'queue' (recommended for production)
+        'strategy' => 'sync',  // 'sync' | 'queue' (recommended for production) | 'callback'
     ],
 ];
 ```
@@ -320,6 +320,7 @@ Query
 ```
 
 With `rebuild.strategy = 'queue'`, the rebuild runs asynchronously — the current request gets data from the Loader directly while the cache is rebuilt in the background.
+With `rebuild.strategy = 'callback'`, you supply a custom callable (e.g. to dispatch to a Horizon priority queue). See [Cache Architecture](docs/cache-architecture.md) for details.
 
 ---
 
@@ -368,22 +369,22 @@ See [`config/kura.php`](config/kura.php) for all available options. Per-table ov
 
 ## Benchmarks
 
-Measured on Apple M4 Pro / PHP 8.4.19 / APCu 5.1.28 (`apc.shm_size=256M`).
+Measured on Apple M4 Pro / PHP 8.4.19 / APCu 5.1.28 (`apc.shm_size=256M`), Docker (linux/arm64).
 Each scenario runs 500 iterations; p95 latency shown.
 
 | Scenario | 1K records | 10K records | 100K records |
 |---|---|---|---|
-| `find($id)` — single record | **0.9 µs** | **0.8 µs** | **0.9 µs** |
-| `where('country','JP')` — indexed `=` | **139 µs** | **1.3 ms** | **16 ms** |
-| `where('country','JP')->where('category','...')` — composite index | **105 µs** | **984 µs** | **11 ms** |
-| `whereBetween('price', [50,100])` — range index | **181 µs** | **1.7 ms** | **18 ms** |
-| `where(...)->orderBy('price')->get()` — index walk | **190 µs** | **1.7 ms** | **21 ms** |
-| `where('active', true)` — non-indexed (full scan) | 477 µs | 4.8 ms | 52 ms |
-| `get()` — all records | 379 µs | 3.7 ms | 40 ms |
-| Cache build (`rebuild()`) | 3.9 ms | 11.8 ms | 115 ms |
+| `find($id)` — single record | **0.9 µs** | **0.9 µs** | **0.9 µs** |
+| `where('country','JP')` — indexed `=` | **134 µs** | **1.2 ms** | **15 ms** |
+| `where('country','JP')->where('category','...')` — composite index | **104 µs** | **936 µs** | **11 ms** |
+| `whereBetween('price', [50,100])` — range index | **182 µs** | **1.5 ms** | **17 ms** |
+| `where(...)->orderBy('price')->get()` — index walk | **182 µs** | **1.6 ms** | **19 ms** |
+| `where('active', true)` — non-indexed (full scan) | 460 µs | 4.5 ms | 49 ms |
+| `get()` — all records | 364 µs | 3.5 ms | 37 ms |
+| Cache build (`rebuild()`) | 2.9 ms | 11.3 ms | 114 ms |
 
 Index-accelerated queries (**bold**) are 3–5× faster than full scans at all scales.
-At 100K records, indexed queries stay under 21 ms; full scans reach ~52 ms.
+At 100K records, indexed queries stay under 19 ms; full scans reach ~49 ms.
 `orderBy` on an indexed column uses an index walk (pre-sorted in APCu) — no PHP sort needed.
 
 > Run `php benchmarks/benchmark.php` in the Docker environment to reproduce.

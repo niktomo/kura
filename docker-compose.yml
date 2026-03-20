@@ -3,8 +3,4 @@ services:
     build: .
     volumes:
       - .:/app
-      - vendor:/app/vendor
     working_dir: /app
-
-volumes:
-  vendor:

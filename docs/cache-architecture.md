@@ -103,8 +103,7 @@ interface LoaderInterface
 - `load()`: Generator for low memory usage. For DB, equivalent to paginated reads
 - `columns()`: Column names and type definitions (`'int'`, `'string'`, `'float'`, `'bool'`). Used at query time for type-aware index building
 - `indexes()`: Declares single-column and composite indexes. Loader's responsibility
-  - `unique: true` → unique index (returns single ID)
-  - `unique: false` → non-unique index (returns ID list)
+  - `unique: true` / `unique: false` — documentation hint only. Kura does not enforce uniqueness; both store IDs as a list and behave identically at query time
   - Composite indexes specify columns in order. Single-column indexes for each column are auto-created
 - `version()`: Version identifier included in cache keys. Returns `string|int|Stringable`
   - The Loader manages the data source version (CSV filename, DB timestamp, etc.)
@@ -775,39 +774,31 @@ Use case: production — cache miss is transparent to the caller
 
 ---
 
-#### Custom dispatcher (programmatic)
+#### strategy: callback
 
 For custom dispatch logic — Horizon priority queues, Octane tasks, custom telemetry, etc.
-Register a `Closure(CacheRepository): void` via `app->extend()` in your `AppServiceProvider`.
-This approach works with any `strategy` config value (including `sync` or `queue` as a base):
-
-> **Note**: there is no `strategy: callback` config value. The custom dispatcher is registered
-> programmatically and overrides the configured strategy at runtime.
+Set `strategy` to `'callback'` and provide a callable in `config/kura.php`:
 
 ```php
-// app/Providers/AppServiceProvider.php
-use Kura\CacheRepository;
-use Kura\KuraManager;
-
-public function register(): void
-{
-    $this->app->extend(KuraManager::class, function (KuraManager $manager) {
-        $manager->setRebuildDispatcher(function (CacheRepository $repo): void {
-            // e.g. dispatch to a specific Horizon queue
-            MyCustomRebuildJob::dispatch($repo->table())->onQueue('kura-rebuild');
-        });
-        return $manager;
-    });
-}
+'rebuild' => [
+    'strategy' => 'callback',
+    'callback' => static function (\Kura\CacheRepository $repository): void {
+        // e.g. dispatch to a specific Horizon queue
+        MyCustomRebuildJob::dispatch($repository->table())->onQueue('kura-rebuild');
+    },
+],
 ```
+
+The callable receives the `CacheRepository` for the table that needs rebuilding.
+It must be set when `strategy` is `'callback'`; omitting it throws `InvalidArgumentException` at container resolution time.
 
 ```
 get() / first() — cache miss detected
   │
-  ├─ ($yourClosure)($repository)  ← your logic runs here
+  ├─ ($yourCallable)($repository)  ← your logic runs here
   └─ Respond from Loader
 
-Latency:  depends on closure implementation
+Latency:  depends on callable implementation
 Queue:    your choice
 Use case: Horizon priority queues, Octane, custom telemetry, etc.
 ```

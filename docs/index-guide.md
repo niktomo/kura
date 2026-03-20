@@ -147,10 +147,14 @@ $indexes = [
 
 ### Unique vs Non-Unique
 
-| Type | Returns | Use case |
-|---|---|---|
-| `unique: true` | Single ID | Primary key alternatives, unique codes |
-| `unique: false` | ID list | Category, status, foreign keys |
+| Type | Use case |
+|---|---|
+| `unique: true` | Primary key alternatives, unique codes |
+| `unique: false` | Category, status, foreign keys |
+
+> **`unique` is a documentation hint, not a constraint.**
+> Kura does not enforce uniqueness. If duplicate values exist in the data, the index stores all matching IDs for that value regardless of the flag.
+> Use `unique: true` to communicate intent — it has no effect on query behavior or index structure.
 
 ---
 

@@ -104,8 +104,7 @@ interface LoaderInterface
 - `load()`: generator で省メモリ。DB なら paginate 相当で読み込み
 - `columns()`: カラム名と型の定義（`'int'`, `'string'`, `'float'`, `'bool'`）。クエリ時の型判定に使用
 - `indexes()`: 単カラム・composite index の宣言。Loader 側の責務
-  - `unique: true` → unique index（単一 ID 返却）
-  - `unique: false` → non-unique index（ID リスト返却）
+  - `unique: true` / `unique: false` — ドキュメント用ヒントのみ。Kura はユニーク性を強制せず、どちらも ID をリストで保持し、クエリ時の動作は同一
   - composite index は `columns` にカラムを順序付きで指定。各カラムの単カラム index も自動作成
 - `version()`: キャッシュキーに含まれるバージョン識別子。`string|int|Stringable` を返す
   - データソースのバージョンを Loader 側が管理する（CSV ファイル名、DB タイムスタンプ等）
@@ -775,39 +774,31 @@ Queue:      Laravel Queue 必須（Redis / SQS / database 等）
 
 ---
 
-#### カスタム dispatcher（プログラムで登録）
+#### strategy: callback
 
 Horizon 優先キュー / Octane タスク / カスタムテレメトリなど、任意のディスパッチロジックを使える。
-`AppServiceProvider` で `app->extend()` を使い `Closure(CacheRepository): void` を登録する。
-どの `strategy` 設定値でも使える（ランタイムで設定済みの strategy を上書きする）。
-
-> **注意**: `strategy: callback` というコンフィグ値は存在しない。カスタム dispatcher は
-> プログラムで登録し、設定された strategy を実行時に上書きする形になる。
+`strategy` を `'callback'` に設定し、`config/kura.php` で callable を指定する。
 
 ```php
-// app/Providers/AppServiceProvider.php
-use Kura\CacheRepository;
-use Kura\KuraManager;
-
-public function register(): void
-{
-    $this->app->extend(KuraManager::class, function (KuraManager $manager) {
-        $manager->setRebuildDispatcher(function (CacheRepository $repo): void {
-            // 例: Horizon の特定キューに dispatch
-            MyCustomRebuildJob::dispatch($repo->table())->onQueue('kura-rebuild');
-        });
-        return $manager;
-    });
-}
+'rebuild' => [
+    'strategy' => 'callback',
+    'callback' => static function (\Kura\CacheRepository $repository): void {
+        // 例: Horizon の特定キューに dispatch
+        MyCustomRebuildJob::dispatch($repository->table())->onQueue('kura-rebuild');
+    },
+],
 ```
+
+callable はリビルドが必要なテーブルの `CacheRepository` を受け取る。
+`strategy` が `'callback'` の場合、`callback` の設定は必須。省略するとコンテナ解決時に `InvalidArgumentException` が投げられる。
 
 ```
 get() / first() — キャッシュミス検知
   │
-  ├─ ($yourClosure)($repository)  ← 独自ロジックをここで実行
+  ├─ ($yourCallable)($repository)  ← 独自ロジックをここで実行
   └─ Loader から返却
 
-レイテンシ: クロージャの実装次第
+レイテンシ: callable の実装次第
 Queue:      任意
 利用シーン: Horizon 優先キュー / Octane / カスタムテレメトリ等
 ```
