@@ -1,5 +1,5 @@
 {
-    "name": "tomonori/kura",
+    "name": "niktomo/kura",
     "description": "A QueryBuilder-compatible APCu cache layer for Laravel reference data.",
     "type": "library",
     "license": "MIT",
