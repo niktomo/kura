@@ -48,79 +48,6 @@ Binary search locates the start/end positions, then slices the matching range. T
 
 ---
 
-## Chunk Splitting (Large Datasets)
-
-When a column has many unique values, loading the entire index from APCu can be wasteful. Kura splits large indexes into **chunks** — smaller segments with known min/max ranges stored in meta.
-
-### Configuration
-
-```php
-// config/kura.php — global setting
-'chunk_size' => 5000,  // number of unique values per chunk
-
-// Per-table override
-'tables' => [
-    'stations' => [
-        'chunk_size' => 10000,
-    ],
-],
-```
-
-`chunk_size` is the number of **unique values** per chunk (not the number of records).
-
-### How It Works
-
-```php
-// Meta stores chunk ranges
-kura:stations:v1.0.0:meta → [
-    'indexes' => [
-        'price' => [
-            ['min' => 100,  'max' => 500],    // chunk 0
-            ['min' => 501,  'max' => 1000],   // chunk 1
-            ['min' => 1001, 'max' => 3000],   // chunk 2
-        ],
-    ],
-]
-
-// Each chunk is a separate APCu key
-kura:stations:v1.0.0:idx:price:0 → [
-    [100, [3, 7]],
-    [200, [1, 12]],
-    [500, [6, 9, 15]],
-]
-kura:stations:v1.0.0:idx:price:1 → [
-    [501, [2, 5]],
-    [700, [8, 14]],
-    [1000, [4, 11]],
-]
-```
-
-### Query with Chunks
-
-```
-where('price', '=', 700)
-  └─ Meta → chunk 1 (501–1000) matches
-       └─ Fetch chunk 1 only → binary search → [8, 14]
-
-where('price', '>', 800)
-  └─ Meta → chunk 1 + chunk 2 overlap
-       └─ Fetch both chunks → binary search in each → collect IDs
-
-where('price', 'BETWEEN', [200, 600])
-  └─ Meta → chunk 0 + chunk 1 overlap
-       └─ Fetch both → range slice in each → collect IDs
-```
-
-Only the relevant chunks are loaded from APCu — no need to read the entire index.
-
-### Rules
-
-- The **same value never spans chunk boundaries**
-- Chunks are built during rebuild (not at query time)
-- `null` = no chunking (single key per column)
-
----
-
 ## Composite Index
 
 A hashmap for resolving **multi-column AND equality** in O(1).
@@ -264,17 +191,11 @@ $loader = new CsvLoader(
     ],
 );
 
-// Config: chunk large indexes
-'tables' => [
-    'stations' => [
-        'chunk_size' => 1000,  // split indexes with 1000+ unique values
-    ],
-],
 ```
 
 This creates:
-- `idx:prefecture` — 47 entries, no chunking needed
-- `idx:line_id` — 300 entries, no chunking needed
+- `idx:prefecture` — 47 entries (one APCu key)
+- `idx:line_id` — 300 entries (one APCu key)
 - `cidx:prefecture|line_id` — O(1) composite hashmap
 
 Queries that benefit:
@@ -296,3 +217,74 @@ Kura::table('stations')
 // No index on 'name' → full scan (still correct, just slower)
 Kura::table('stations')->where('name', 'Tokyo')->get();
 ```
+
+---
+
+## Index Strategy
+
+### Which columns to index
+
+Index columns that appear frequently in `where` conditions and have **high selectivity** (the value narrows the result set significantly).
+
+| Column type | Index? | Reason |
+|---|---|---|
+| Primary key alternative (code, slug) | ✅ unique | O(1) single-record lookup |
+| Foreign key / category (country, status) | ✅ non-unique | Reduces scan by cardinality |
+| Boolean flag (active, deleted) | ❌ rarely useful | Only 2 values — low selectivity, large result sets |
+| Free-text (name, description) | ❌ | Kura doesn't support full-text; LIKE forces full scan anyway |
+| Numeric range (price, age) | ✅ if queried with `>` / `BETWEEN` | Binary search for range slicing |
+
+### When to add a composite index
+
+Add a composite index when **both columns appear together in AND equality conditions** and neither alone narrows the candidates sufficiently.
+
+```php
+// Good candidate for composite — always queried together
+->where('prefecture', 'Tokyo')->where('line_id', 1)
+
+// Not a good candidate — 'prefecture' alone is selective enough
+->where('prefecture', 'Tokyo')->where('active', true)
+```
+
+**Do not** add a composite index just because two columns exist. Composite indexes have a cost:
+
+- More APCu keys written at rebuild time
+- The composite hashmap holds all unique combinations — if cardinality is high (many combinations), the stored map is large and deserialization is expensive
+
+### Cardinality and composite index efficiency
+
+The composite index is most effective when the **combination has lower cardinality than the individual columns**.
+
+```
+prefecture: 47 values
+line_id: 300 values
+prefecture × line_id combinations: ~900 (most stations are in one prefecture+line)
+→ Good: composite narrows directly to a small result set
+```
+
+```
+user_id: 100,000 values
+product_id: 50,000 values
+user_id × product_id combinations: millions
+→ Bad: composite map is enormous; full scan may be faster
+```
+
+Rule of thumb: **composite index is worth it when the expected combination count is under ~10,000**.
+
+### When composite index is counterproductive
+
+When a query matches **most of the dataset**, the composite index loses its advantage:
+
+- The hashmap must be deserialized entirely before any lookup
+- All matched IDs still need to be fetched from APCu record-by-record
+- Full scan with sequential access may be faster than large hashmap deserialization
+
+**Example**: If `whereRowValuesIn` tuples cover 80%+ of all records, skip the composite index and rely on single-column indexes + WhereEvaluator filtering.
+
+### 3+ column composites
+
+Kura supports composite indexes on 3+ columns, but they are rarely worth the added complexity:
+
+- The combination space grows exponentially
+- Single-column indexes for each column are auto-created anyway — use those + WhereEvaluator
+- Reserve 3-column composites for very specific, high-frequency lookup patterns with provably low combination counts

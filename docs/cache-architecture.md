@@ -11,7 +11,7 @@ Data loading is performed through `LoaderInterface`. `CsvLoader`, `EloquentLoade
 >
 > Related docs:
 > - [Version Management](version-management.md) — version drivers, middleware, deployment flow
-> - [Index Guide](index-guide.md) — index types, chunking, composite indexes, range queries
+> - [Index Guide](index-guide.md) — index types, composite indexes, range queries
 > - [Query Recipes](query-recipes.md) — practical query patterns and examples
 
 ---
@@ -33,7 +33,7 @@ ReferenceQueryBuilderInterface extends BuilderContract
             │  compilePredicate() — converts where conditions to closures
             │
             ├─ CacheRepository
-            │    │  find(), ids(), meta(), reload()
+            │    │  find(), ids(), reload()
             │    │  APCu read/write + Self-Healing
             │    │
             │    ├─ StoreInterface (APCu abstraction)
@@ -100,8 +100,8 @@ interface LoaderInterface
 }
 ```
 
-- `load()`: Generator for low memory usage. For DB, equivalent to paginated chunk reads
-- `columns()`: Column names and type definitions (`'int'`, `'string'`, `'float'`, `'bool'`). Used for meta construction
+- `load()`: Generator for low memory usage. For DB, equivalent to paginated reads
+- `columns()`: Column names and type definitions (`'int'`, `'string'`, `'float'`, `'bool'`). Used at query time for type-aware index building
 - `indexes()`: Declares single-column and composite indexes. Loader's responsibility
   - `unique: true` → unique index (returns single ID)
   - `unique: false` → non-unique index (returns ID list)
@@ -114,60 +114,21 @@ interface LoaderInterface
 
 ## Cache Types
 
-APCu stores **5 types** of data.
+APCu stores **4 types** of data.
 
 | Type | Purpose | Behavior on loss |
 |------|---------|-----------------|
-| **meta** | Column definitions + index structure + composites | Full rebuild |
 | **ids** | List of all IDs | Full rebuild |
 | **record** | Single record data (associative array) | Check existence in ids → full rebuild if expected |
 | **index** | Search indexes (ID lists) | Respond via full scan + full cache rebuild |
 | **cidx** | Composite index (multi-column hashmap) | Respond via full scan + full cache rebuild |
 
----
-
-## 1. meta
-
-Table metadata. Holds column definitions and index structure.
-
-```php
-kura:products:v1.0.0:meta → [
-    'columns' => [
-        'id'      => 'int',
-        'name'    => 'string',
-        'country' => 'string',
-        'price'   => 'int',
-    ],
-    'indexes' => [
-        // No chunking (default)
-        'country' => [],
-
-        // Chunked (when chunk_size is set in config)
-        'price' => [
-            ['min' => 100,  'max' => 500],
-            ['min' => 501,  'max' => 1000],
-            ['min' => 1001, 'max' => 3000],
-        ],
-    ],
-    'composites' => ['country|category'],
-]
-```
-
-### Purpose
-
-- **columns**: Column names and type definitions. Used for type determination during index construction
-- **indexes**: Which columns have indexes and how chunks are split
-  - `[]` (empty array) → no chunking. Index is a single key
-  - Array present → chunked. Each element's min/max represents the range
-- **composites**: List of composite index names (`"col1|col2"` format)
-
-### Characteristics
-
-- If meta is lost → **full rebuild**
+Index structure (which columns are indexed, which composites exist) is **not stored in APCu**.
+It is derived at query time from `LoaderInterface::indexes()`, which is instance-cached in the Loader.
 
 ---
 
-## 2. ids
+## 1. ids
 
 List of all IDs.
 
@@ -184,11 +145,11 @@ kura:products:v1.0.0:ids → [1, 2, 3, ...]
 ### Characteristics
 
 - If ids is lost → **full rebuild**
-- Has the shortest TTL among the 5 types (serves as rebuild trigger)
+- Has the shortest TTL among the 4 types (serves as rebuild trigger)
 
 ---
 
-## 3. record
+## 2. record
 
 Data for a single record. Stored as-is as an associative array.
 
@@ -196,9 +157,8 @@ Data for a single record. Stored as-is as an associative array.
 kura:products:v1.0.0:record:1 → ['id' => 1, 'name' => 'Widget A', 'country' => 'JP', 'price' => 500]
 ```
 
-- Records are self-contained (readable without meta)
-- `find(id)` is the most frequent operation → can return immediately without meta
-- meta focuses on index structure management
+- Records are self-contained (no meta dependency)
+- `find(id)` is the most frequent operation → can return immediately
 
 ### Self-Healing on Record Loss
 
@@ -212,13 +172,11 @@ Record retrieval
 
 ---
 
-## 4. index
+## 3. index
 
 Search indexes. Structure for looking up IDs from column values (single column).
 
-### No Chunking (Default)
-
-One key per value. Value → IDs mapping.
+One key per column. Value → IDs mapping, sorted by value ascending.
 
 ```php
 kura:products:v1.0.0:idx:country → [
@@ -226,64 +184,22 @@ kura:products:v1.0.0:idx:country → [
     ['US', [2, 4, 8]],
     ['DE', [5, 7]],
 ]
-// Sorted by value in ascending order
 ```
 
 - Equality search `=` → binary search O(log n)
 - Range search `>`, `<`, `BETWEEN` → binary search to find start position → slice
 
-### Chunked (When chunk_size Is Set in Config)
-
-For large datasets. Index is split by unique value count into chunk_size groups, with each chunk's min/max stored in meta.
-chunk_size unit is **number of unique values** (distinct values per chunk).
-
-```php
-// Definition in meta
-'price' => [
-    ['min' => 100,  'max' => 500],    // chunk 0
-    ['min' => 501,  'max' => 1000],   // chunk 1
-    ['min' => 1001, 'max' => 3000],   // chunk 2
-]
-
-// Each chunk key
-kura:products:v1.0.0:idx:price:0 → [
-    [100, [3, 7]],       // IDs for price=100
-    [200, [1, 12]],      // IDs for price=200
-    [500, [6, 9, 15]],   // IDs for price=500
-]
-kura:products:v1.0.0:idx:price:1 → [
-    [501, [2, 5]],
-    [700, [8, 14]],
-    [1000, [4, 11]],
-]
-```
-
-- Chunks also use `[[value, [ids]], ...]` structure (sorted by value ascending)
-- Both equality and range queries can resolve IDs without fetching records
-- **The same value always stays in the same chunk** (never spans chunk boundaries)
-
-#### Chunk Splitting Algorithm
-
-```
-1. Sort index data [value → [ids]] by value ascending
-2. Slice the sorted list into chunks of chunk_size (number of unique values)
-3. Record first value = min, last value = max for each chunk in meta
-```
-
 ### Index Query Behavior
 
 ```
 where('price', '=', 700)
-  └─ Check meta → hits chunk 1 (501–1000)
-       └─ Binary search within chunk 1 → immediately get [8, 14]
+  └─ Binary search → immediately get [8, 14]
 
 where('price', '>', 800)
-  └─ Check meta → chunk 1 + chunk 2 overlap
-       └─ Binary search within each chunk → collect matching IDs
+  └─ Binary search to find start position → slice to end → collect IDs
 
 where('price', 'BETWEEN', [200, 600])
-  └─ Check meta → chunk 0 + chunk 1 overlap
-       └─ Range slice within each chunk → collect matching IDs
+  └─ Binary search for range boundaries → slice → collect IDs
 ```
 
 ### Multi-Column WHERE (Intersection)
@@ -370,7 +286,7 @@ De Morgan expansion is implicitly applied during closure evaluation in compilePr
 
 ---
 
-## 5. Composite Index (cidx)
+## 4. Composite Index (cidx)
 
 A hashmap for resolving multi-column AND equality in O(1).
 
@@ -457,12 +373,8 @@ Query execution
   │    → Don't look at cache
   │    → Loader→generator → where evaluation → return
   │
-  ├─ No lock + ids present + meta present
-  │    → Normal query (uses indexes)
-  │
-  ├─ No lock + ids present + meta missing
-  │    → ids + full scan (index being built or index lost)
-  │    → Queue dispatch to rebuild index + meta
+  ├─ No lock + ids present
+  │    → Normal query (uses indexes derived from Loader::indexes())
   │
   └─ No lock + ids missing
        → Queue dispatch for full cache rebuild
@@ -470,33 +382,33 @@ Query execution
 ```
 
 - During rebuild, cache consistency cannot be guaranteed, so respond directly from Loader
-- Loader uses generators for low memory usage (equivalent to paginated chunk reads for DB)
+- Loader uses generators for low memory usage (equivalent to paginated reads for DB)
 
 ### Rebuild Job
 
-**Cache is built in 2 phases.** record + ids complete first, making queries possible.
+**Cache is built entirely under the rebuild lock.**
 
 ```
-Phase 1 (APCu locked):
+(APCu locked throughout):
+  flush() — clear all existing keys for this table+version
+
   Get generator from Loader->load()
   In a single loop:
     ├─ apcu_store records (one at a time)
     ├─ Collect ids [id, ...]
     └─ Collect index data [col → [value → [id, ...]]]
   After loop:
-    └─ apcu_store ids
-  Release lock ← queries now possible (full scan mode)
+    ├─ apcu_store ids
+    ├─ apcu_store indexes (sorted by value)
+    └─ apcu_store composite indexes (hashmap)
 
-Phase 2 (no lock):
-  Build indexes (sort + chunk split) → apcu_store
-  Build meta → apcu_store
-  ← index-accelerated queries now possible
+  Release lock ← index-accelerated queries now possible
 ```
 
-- **Phase 1**: Builds record + ids. While locked, all queries fall back to Loader
-- **Phase 2**: Builds index + meta. Lock released, so queries respond via full scan
-- Records are `apcu_store`d one at a time during the loop for immediate availability
-- ids are bulk `apcu_store`d after the loop
+- While locked, all queries fall back to Loader directly (safe, correct)
+- Index writes happen inside the lock — no window where ids exist but indexes don't
+- Records are `apcu_store`d one at a time during the loop
+- ids, indexes, and cidx are bulk-written after the loop completes
 
 apcu_store overwrites. Even if existing data is present, it's overwritten with the same data and TTL is reset (extended).
 No existence check needed. Simply rewrite everything from Loader.
@@ -509,16 +421,15 @@ On record loss, cursor() throws an exception; get() catches it and falls back to
 ```
 where('country', 'JP')->where('price', '>', 500)->get()
 
-⓪ Lock check + ids/meta existence check
+⓪ Lock check + ids existence check
    ├─ Lock present → Loader fallback
    ├─ ids missing → Loader fallback + rebuild dispatch
    └─ ids present → continue cache query
 
 ① Candidate ID resolution (resolveIds)
-   meta present → determine if conditions can be narrowed via index
-     ├─ Yes → get ID set from index (intersection / union)
-     └─ No → ids (all)
-   meta missing → all ids (full scan) + rebuild dispatch
+   Derive index structure from Loader::indexes() (instance-cached)
+     ├─ Conditions match indexed columns → get ID set from index (intersection / union)
+     └─ No index match → ids (all IDs, full scan)
 
 ② Convert all where conditions to closures (compilePredicate)
 
@@ -553,9 +464,7 @@ Query execution
   ├─ Lock present (rebuild in progress)
   │    → Respond from Loader directly
   │
-  ├─ ids present + meta present → normal query (uses indexes)
-  │
-  ├─ ids present + meta missing → respond via full scan + Queue dispatch for full rebuild
+  ├─ ids present → normal query (index structure from Loader::indexes())
   │
   ├─ ids missing → respond from Loader directly + Queue dispatch for full rebuild
   │
@@ -563,8 +472,8 @@ Query execution
   │    → cursor(): CacheInconsistencyException + Queue dispatch
   │    → get(): catch exception → Loader fallback
   │
-  └─ index loss (meta exists but index key is gone)
-       → respond via full scan + Queue dispatch for index rebuild
+  └─ index loss (declared in Loader::indexes() but key missing from APCu)
+       → IndexInconsistencyException → get(): Loader fallback + Queue dispatch for full rebuild
 ```
 
 ### cursor() and get()
@@ -639,7 +548,6 @@ Breakdown:
   record:  serialize(associative array) × record count
   ids:     ~8–12 bytes/entry after serialization ([id, ...] list format)
   index:   [[value, [ids]], ...] × column count
-  meta:    a few KB (negligible)
 
 × 2–3x: APCu internal overhead (hash table, memory fragmentation)
 ```
@@ -740,17 +648,11 @@ public function cursor(
         return;
     }
 
-    $meta = $repository->meta();
+    // Derive index structure from Loader::indexes() (instance-cached per CacheProcessor)
+    [$indexedColumns, $compositeNames] = $this->resolveIndexDefs();
+    $resolver = new IndexResolver($store, $table, $version, $indexedColumns, $compositeNames);
 
-    // meta missing → can't use indexes, dispatch full rebuild
-    if ($meta === false) {
-        $this->dispatchRebuild();
-    }
-
-    // meta present → narrow via IndexResolver, meta missing → all ids
-    $candidateIds = $meta !== false
-        ? $resolver->resolveIds($wheres, $meta) ?? $ids
-        : $ids;
+    $candidateIds = $resolver->resolveIds($wheres) ?? $ids;
 
     $idsMap = array_fill_keys($ids, true);
 
@@ -806,11 +708,11 @@ Uses `apcu_add` to acquire a lock key, preventing multiple simultaneous rebuilds
 - Present in APCu → read and re-save (`apcu_store` resets TTL)
 - Not in APCu → fetch from Loader, build and save
 - Works the same whether everything or only parts are missing
-- When Loader is called, all caches (ids, record, meta, index) are rebuilt
+- When Loader is called, all caches (ids, record, index, cidx) are rebuilt
 
 **rebuild() always does a full flush + rebuild**: it calls `flush()` first to clear all existing cache
 keys for the table, then reloads everything from the Loader. There is no partial-rebuild path —
-all keys (ids, records, meta, indexes) are always re-written together.
+all keys (ids, records, indexes, composite indexes) are always re-written together, inside the lock.
 
 ### Rebuild Strategy
 
@@ -830,8 +732,7 @@ get() / first() — cache miss detected
   │
   ├─ Respond from Loader (Generator → records returned to caller)
   └─ rebuild() called in the same process, same request
-       └─ Phase 1: load all records → write record + ids to APCu  (locked)
-       └─ Phase 2: build index + meta → write to APCu             (unlocked)
+       └─ Flush + load all records → write record + ids + indexes to APCu  (locked throughout)
        └─ Next request hits APCu normally
 
 Latency:  first miss = Loader read time + full cache write time
@@ -863,8 +764,7 @@ get() / first() — cache miss detected
   [Background worker]
     RebuildCacheJob::handle()
       └─ KuraManager::rebuild($table)
-           └─ Phase 1: load → APCu (locked)
-           └─ Phase 2: index + meta → APCu (unlocked)
+           └─ flush + load → APCu (locked throughout)
 
   Next request → APCu hit (normal fast path)
 
@@ -1065,10 +965,9 @@ Without this migration, `Bus::batch()->dispatch()` will throw an error.
 
 ```php
 'ttl' => [
-    'ids'       => 3600,    // 1 hour (shortest. rebuild trigger)
-    'meta'      => 4800,    // 1 hour 20 minutes
-    'record'    => 4800,    // 1 hour 20 minutes
-    'index'     => 4800,    // 1 hour 20 minutes
+    'ids'        => 3600,   // 1 hour (shortest. rebuild trigger)
+    'record'     => 4800,   // 1 hour 20 minutes
+    'index'      => 4800,   // 1 hour 20 minutes
     'ids_jitter' => 600,    // random 0–600s added to ids TTL (thundering herd prevention)
 ],
 ```
@@ -1076,12 +975,12 @@ Without this migration, `Bus::batch()->dispatch()` will throw an error.
 ### Relationships
 
 ```
-ids (3600) < meta / record / index / cidx (4800)
+ids (3600) < record / index / cidx (4800)
 ```
 
 - **ids expires first** → rebuild trigger
-- **meta is still alive** → index structure is known, query optimization possible
 - **record/index are still alive** → can respond to queries during rebuild
+- Index structure is always available from `Loader::indexes()` (no APCu dependency)
 
 ### Write Rules
 
@@ -1102,13 +1001,10 @@ return [
 
     'ttl' => [
         'ids'        => 3600,   // shortest — expiry triggers rebuild
-        'meta'       => 4800,
         'record'     => 4800,
         'index'      => 4800,
         'ids_jitter' => 600,    // random 0–600s added to ids TTL (thundering herd prevention)
     ],
-
-    'chunk_size' => null,  // null = no chunking. Set to 10000 etc. for global chunking
 
     'lock_ttl' => 60,  // Rebuild lock TTL (seconds). Set to 1.5–2x the expected Loader execution time
 
@@ -1133,7 +1029,6 @@ return [
         // Only when per-table overrides are needed
         // 'products' => [
         //     'ttl' => ['record' => 7200],
-        //     'chunk_size' => 10000,
         // ],
     ],
 ];
@@ -1144,22 +1039,18 @@ return [
 ## Key Structure
 
 ```
-{prefix}:{table}:{version}:meta                    — Meta information (columns + indexes + composites)
 {prefix}:{table}:{version}:ids                     — Full ID list [id, ...]
 {prefix}:{table}:{version}:record:{id}             — Single record (associative array)
-{prefix}:{table}:{version}:idx:{col}               — Index (no chunking, single key)
-{prefix}:{table}:{version}:idx:{col}:{chunk}       — Index (chunked, chunk number)
+{prefix}:{table}:{version}:idx:{col}               — Index (single key per column)
 {prefix}:{table}:{version}:cidx:{col1|col2}        — Composite index (hashmap)
 {prefix}:{table}:lock                               — Rebuild lock (version-independent)
 ```
 
 Default (prefix=`kura`):
 ```
-kura:products:v1.0.0:meta
 kura:products:v1.0.0:ids
 kura:products:v1.0.0:record:1
-kura:products:v1.0.0:idx:country              — no chunking
-kura:products:v1.0.0:idx:price:0              — chunked
-kura:products:v1.0.0:idx:price:1
+kura:products:v1.0.0:idx:country
+kura:products:v1.0.0:idx:price
 kura:products:v1.0.0:cidx:country|category    — composite index
 ```

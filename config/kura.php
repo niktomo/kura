@@ -8,21 +8,19 @@ return [
 
     /*
      * TTL in seconds per cache type.
-     * ids is shortest — its expiry triggers rebuild.
+     *
+     * ids is the rebuild trigger — its expiry causes the next query to rebuild.
+     * index defaults to ids TTL (including jitter) when omitted, so they expire together.
+     * meta and record are longer to survive across rebuilds.
+     *
+     * ids_jitter: random 0–N seconds added to both ids and index TTL to prevent thundering herd.
      */
     'ttl' => [
         'ids' => 3600,
-        'meta' => 4800,
         'record' => 4800,
-        'index' => 4800,
-        'ids_jitter' => 600,  // random 0–600s added to ids TTL to prevent thundering herd
+        // 'index' — omit to match ids TTL (recommended), or set explicitly to override
+        'ids_jitter' => 600,  // applied to both ids and index TTL
     ],
-
-    /*
-     * Chunk size for index splitting (number of unique values per chunk).
-     * null = no chunking.
-     */
-    'chunk_size' => null,
 
     /*
      * Rebuild lock TTL in seconds.
@@ -84,12 +82,32 @@ return [
     ],
 
     /*
+     * CSV auto-discovery.
+     *
+     * When auto_discover is true, KuraServiceProvider scans base_path for subdirectories
+     * and registers each as a CsvLoader table automatically.
+     *
+     * Directory layout:
+     *   {base_path}/
+     *     versions.csv          — shared version file (id, version, activated_at)
+     *     {table}/
+     *       data.csv            — required; directory is skipped if absent
+     *       defines.csv         — column type definitions
+     *       indexes.csv         — index definitions
+     *
+     * To override primary_key or TTL for a specific table, use the 'tables' section below.
+     */
+    'csv' => [
+        'base_path' => '',
+        'auto_discover' => false,
+    ],
+
+    /*
      * Per-table overrides.
      *
      * 'tables' => [
      *     'products' => [
      *         'ttl' => ['record' => 7200],
-     *         'chunk_size' => 10000,
      *     ],
      * ],
      */

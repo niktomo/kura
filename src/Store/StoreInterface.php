@@ -20,25 +20,17 @@ interface StoreInterface
     /** @param array<string, mixed> $record */
     public function putRecord(string $table, string $version, int|string $id, array $record, int $ttl): void;
 
-    // meta
-
-    /** @return array<string, mixed>|false */
-    public function getMeta(string $table, string $version): array|false;
-
-    /** @param array<string, mixed> $meta */
-    public function putMeta(string $table, string $version, array $meta, int $ttl): void;
-
     // index (whole-column, [[value, [ids]], ...] format)
 
     /**
      * @return list<array{mixed, list<int|string>}>|false
      */
-    public function getIndex(string $table, string $version, string $column, ?int $chunk = null): array|false;
+    public function getIndex(string $table, string $version, string $column): array|false;
 
     /**
      * @param  list<array{mixed, list<int|string>}>  $entries
      */
-    public function putIndex(string $table, string $version, string $column, array $entries, int $ttl, ?int $chunk = null): void;
+    public function putIndex(string $table, string $version, string $column, array $entries, int $ttl): void;
 
     // composite index (combined-value hashmap)
 

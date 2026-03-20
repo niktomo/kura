@@ -2,6 +2,8 @@
 
 namespace Kura\Loader;
 
+use Kura\Contracts\VersionResolverInterface;
+
 /**
  * Loads records from a single data.csv file with version-based filtering.
  *
@@ -19,12 +21,15 @@ namespace Kura\Loader;
  */
 final class CsvLoader implements LoaderInterface
 {
+    /** @var list<array{columns: list<string>, unique: bool}>|null */
+    private ?array $loadedIndexes = null;
+
     /**
      * @param  list<array{columns: list<string>, unique: bool}>  $indexDefinitions
      */
     public function __construct(
         private readonly string $tableDirectory,
-        private readonly CsvVersionResolver $resolver,
+        private readonly VersionResolverInterface $resolver,
         private readonly array $indexDefinitions = [],
         private readonly string $versionColumn = 'version',
     ) {}
@@ -34,7 +39,7 @@ final class CsvLoader implements LoaderInterface
      */
     public function load(): \Generator
     {
-        $activeVersion = $this->resolver->resolveVersion();
+        $activeVersion = $this->resolver->resolve();
         if ($activeVersion === null) {
             return;
         }
@@ -97,12 +102,16 @@ final class CsvLoader implements LoaderInterface
      */
     public function indexes(): array
     {
-        return $this->indexDefinitions;
+        if ($this->indexDefinitions !== []) {
+            return $this->indexDefinitions;
+        }
+
+        return $this->loadedIndexes ??= $this->loadIndexes();
     }
 
     public function version(): string
     {
-        return $this->resolver->resolveVersion() ?? '';
+        return $this->resolver->resolve() ?? '';
     }
 
     /** @return array<string, string> column => type */
@@ -130,6 +139,49 @@ final class CsvLoader implements LoaderInterface
         fclose($fp);
 
         return $types;
+    }
+
+    /**
+     * @return list<array{columns: list<string>, unique: bool}>
+     */
+    private function loadIndexes(): array
+    {
+        $indexesFile = $this->tableDirectory.'/indexes.csv';
+        if (! file_exists($indexesFile)) {
+            return [];
+        }
+
+        $fp = fopen($indexesFile, 'r');
+        if ($fp === false) {
+            return [];
+        }
+
+        fgetcsv($fp, escape: ''); // Skip header
+
+        $indexes = [];
+        while (($row = fgetcsv($fp, escape: '')) !== false) {
+            if (count($row) < 2 || $row[0] === null || $row[1] === null) {
+                continue;
+            }
+
+            $columns = array_values(array_filter(
+                explode('|', $row[0]),
+                fn (string $c) => $c !== '',
+            ));
+
+            if ($columns === []) {
+                continue;
+            }
+
+            $indexes[] = [
+                'columns' => $columns,
+                'unique' => $row[1] === 'true',
+            ];
+        }
+
+        fclose($fp);
+
+        return $indexes;
     }
 
     private function cast(mixed $value, string $type): mixed

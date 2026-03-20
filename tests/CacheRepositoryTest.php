@@ -131,34 +131,6 @@ class CacheRepositoryTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // meta()
-    // -------------------------------------------------------------------------
-
-    public function test_meta_returns_false_when_not_cached(): void
-    {
-        $repo = $this->makeRepository([]);
-
-        $this->assertFalse(
-            $repo->meta(),
-            'meta() should return false when meta is not in the cache',
-        );
-    }
-
-    public function test_meta_returns_cached_meta(): void
-    {
-        $meta = ['columns' => ['id' => 'int'], 'indexes' => []];
-        $this->store->putMeta('users', 'v1', $meta, 3600);
-
-        $repo = $this->makeRepository([]);
-
-        $this->assertSame(
-            $meta,
-            $repo->meta(),
-            'meta() should return the meta stored in the cache',
-        );
-    }
-
-    // -------------------------------------------------------------------------
     // isLocked()
     // -------------------------------------------------------------------------
 
@@ -224,35 +196,6 @@ class CacheRepositoryTest extends TestCase
         );
     }
 
-    public function test_rebuild_stores_meta(): void
-    {
-        $repo = new CacheRepository(
-            table: 'users',
-            primaryKey: 'id',
-            store: $this->store,
-            loader: new InMemoryLoader(
-                records: [['id' => 1, 'name' => 'Alice']],
-                columns: ['id' => 'int', 'name' => 'string'],
-                indexes: [['columns' => ['name'], 'unique' => false]],
-            ),
-        );
-
-        $repo->rebuild();
-
-        $meta = $this->store->getMeta('users', 'v1');
-        assert(is_array($meta));
-        $this->assertSame(
-            ['id' => 'int', 'name' => 'string'],
-            $meta['columns'],
-            'rebuild should store columns from loader in meta',
-        );
-        $this->assertSame(
-            ['name' => []],
-            $meta['indexes'],
-            'rebuild should store index meta (column => chunk info) — empty array means no chunks',
-        );
-    }
-
     public function test_rebuild_flushes_stale_data_before_loading(): void
     {
         $this->store->putIds('users', 'v1', [99], 3600);
@@ -313,80 +256,6 @@ class CacheRepositoryTest extends TestCase
             [[100, [3]], [200, [2]], [500, [1]]],
             $priceIndex,
             'Price index should contain sorted entries with grouped IDs',
-        );
-    }
-
-    public function test_rebuild_stores_indexes_with_chunks(): void
-    {
-        $repo = new CacheRepository(
-            table: 'products',
-            primaryKey: 'id',
-            store: $this->store,
-            loader: new InMemoryLoader(
-                records: [
-                    ['id' => 1, 'price' => 100],
-                    ['id' => 2, 'price' => 200],
-                    ['id' => 3, 'price' => 500],
-                    ['id' => 4, 'price' => 700],
-                ],
-                columns: ['id' => 'int', 'price' => 'int'],
-                indexes: [['columns' => ['price'], 'unique' => false]],
-            ),
-        );
-
-        $repo->rebuild(chunkSize: 2);
-
-        // Verify chunked index
-        $chunk0 = $this->store->getIndex('products', 'v1', 'price', 0);
-        $this->assertIsArray($chunk0, 'rebuild should store chunk 0 of price index');
-        $this->assertSame(
-            [[100, [1]], [200, [2]]],
-            $chunk0,
-            'Chunk 0 should contain first 2 unique values',
-        );
-
-        $chunk1 = $this->store->getIndex('products', 'v1', 'price', 1);
-        $this->assertIsArray($chunk1, 'rebuild should store chunk 1 of price index');
-        $this->assertSame(
-            [[500, [3]], [700, [4]]],
-            $chunk1,
-            'Chunk 1 should contain next 2 unique values',
-        );
-
-        // Verify meta has chunk info
-        $meta = $this->store->getMeta('products', 'v1');
-        assert(is_array($meta));
-        $this->assertSame(
-            [
-                ['min' => 100, 'max' => 200],
-                ['min' => 500, 'max' => 700],
-            ],
-            $meta['indexes']['price'],
-            'Meta should contain chunk min/max for chunked index',
-        );
-    }
-
-    public function test_rebuild_meta_indexes_empty_for_no_chunk(): void
-    {
-        $repo = new CacheRepository(
-            table: 'products',
-            primaryKey: 'id',
-            store: $this->store,
-            loader: new InMemoryLoader(
-                records: [['id' => 1, 'country' => 'JP']],
-                columns: ['id' => 'int', 'country' => 'string'],
-                indexes: [['columns' => ['country'], 'unique' => false]],
-            ),
-        );
-
-        $repo->rebuild();
-
-        $meta = $this->store->getMeta('products', 'v1');
-        assert(is_array($meta));
-        $this->assertSame(
-            [],
-            $meta['indexes']['country'],
-            'Meta indexes for non-chunked column should be empty array',
         );
     }
 
@@ -533,35 +402,6 @@ class CacheRepositoryTest extends TestCase
         $this->assertSame([1, 4], $compositeIndex['JP|A'], 'Composite index JP|A should contain IDs 1 and 4');
         $this->assertSame([2], $compositeIndex['US|B'], 'Composite index US|B should contain ID 2');
         $this->assertSame([3], $compositeIndex['JP|B'], 'Composite index JP|B should contain ID 3');
-    }
-
-    public function test_rebuild_meta_includes_composite_names(): void
-    {
-        // Arrange
-        $repo = new CacheRepository(
-            table: 'products',
-            primaryKey: 'id',
-            store: $this->store,
-            loader: new InMemoryLoader(
-                records: [
-                    ['id' => 1, 'country' => 'JP', 'category' => 'A'],
-                ],
-                columns: ['id' => 'int', 'country' => 'string', 'category' => 'string'],
-                indexes: [['columns' => ['country', 'category'], 'unique' => false]],
-            ),
-        );
-
-        // Act
-        $repo->rebuild();
-
-        // Assert
-        $meta = $this->store->getMeta('products', 'v1');
-        assert(is_array($meta));
-        $this->assertSame(
-            ['country|category'],
-            $meta['composites'],
-            'Meta should list composite index names',
-        );
     }
 
     public function test_rebuild_skips_composite_entry_when_column_is_null(): void

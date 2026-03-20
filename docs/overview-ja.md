@@ -48,14 +48,14 @@ src/
 │       └── KuraAuthMiddleware.php     warm ルートの Bearer トークン認証
 ├── Index/
 │   ├── IndexDefinition.php            インデックス定義 DTO（unique / non-unique）
-│   ├── IndexBuilder.php               インデックス構築（ソート・chunk 分割・composite）
+│   ├── IndexBuilder.php               インデックス構築（ソート・composite）
 │   ├── IndexResolver.php              index からの候補 ID 解決
 │   └── BinarySearch.php               ソート済み index の binary search
 ├── Jobs/
 │   └── RebuildCacheJob.php            非同期キャッシュ再構築ジョブ
 ├── Loader/
 │   ├── LoaderInterface.php            データ取得の抽象インターフェース
-│   ├── CsvLoader.php                  CSV ベースの Loader（version カラム付き data.csv）
+│   ├── CsvLoader.php                  CSV ベースの Loader（data.csv + defines.csv + indexes.csv）
 │   ├── CsvVersionResolver.php         versions.csv からアクティブバージョンを解決
 │   ├── EloquentLoader.php             Eloquent モデルベースの Loader
 │   └── QueryBuilderLoader.php         QueryBuilder ベースの Loader
@@ -76,26 +76,28 @@ src/
 ## APCu キー構造
 
 ```
-{prefix}:{table}:{version}:meta                    メタ情報（columns + indexes + composites）
 {prefix}:{table}:{version}:ids                     全 ID リスト [id, ...]
 {prefix}:{table}:{version}:record:{id}             1 レコード（連想配列）
-{prefix}:{table}:{version}:idx:{col}               index（chunk なし）
-{prefix}:{table}:{version}:idx:{col}:{chunk}       index（chunk あり）
+{prefix}:{table}:{version}:idx:{col}               index（カラムごとに単一キー）
 {prefix}:{table}:{version}:cidx:{col1|col2}        composite index（hashmap）
 {prefix}:{table}:lock                               rebuild ロック（version 非依存）
 ```
+
+インデックス構造（どのカラムがインデックスされているか、composite の一覧）は **APCu には保存しない**。
+クエリ時に `LoaderInterface::indexes()` から取得する（Loader がインスタンスキャッシュ）。
 
 ### TTL の考え方
 
 | キー | TTL | 役割 |
 |------|-----|------|
 | `ids` | 短い（例: 3600秒） | 失効 → 全再構築トリガー |
-| `meta` | 長い（例: 4800秒） | 失効 → full scan + 再構築 |
 | `record:*` | 長い（例: 4800秒） | 失効 → ids にある → 全再構築 |
-| `index` | 長い（例: 4800秒） | 失効 → full scan + 再構築 |
-| `cidx` | 長い（例: 4800秒） | 失効 → full scan + 再構築 |
+| `index` | ids と同じ（デフォルト） | 失効 → `IndexInconsistencyException` → 再構築 |
+| `cidx` | ids と同じ（デフォルト） | 失効 → `IndexInconsistencyException` → 再構築 |
 
-TTL は `config/kura.php` で設定。ids が最短（再構築トリガーの役割）。
+TTL は `config/kura.php` で設定。`ids` が最短（再構築トリガーの役割）。`index` はデフォルトで `ids` と同じ TTL（jitter 込み）になるよう設計されており、同タイミングで失効する。
+
+`LoaderInterface::indexes()` で宣言済みのインデックスに対して APCu キーが欠損している場合（`IndexInconsistencyException`）は、`CacheInconsistencyException` と同じ回復パス（rebuild + Loader フォールバック）を辿る。
 
 ### バージョン管理の仕組み
 
@@ -141,17 +143,15 @@ RebuildCacheJob（非同期）
   └─ Loader::load()                     ← Generator でレコードをストリーミング
        └─ apcu_store({version}:record:{id})  ← 1件ずつ書き込み
        └─ apcu_store({version}:ids)          ← ループ後に一括
-       └─ apcu_store({version}:idx:*)        ← Phase 2 で構築
-       └─ apcu_store({version}:cidx:*)       ← Phase 2 で構築
-       └─ apcu_store({version}:meta)         ← Phase 2 で構築
+       └─ apcu_store({version}:idx:*)        ← ロック内で書き込み（ループ後）
+       └─ apcu_store({version}:cidx:*)       ← ロック内で書き込み（ループ後）
 ```
 
 ### クエリ実行時の self-healing
 
 ```
 ReferenceQueryBuilder::get()
-  ├─ ids あり + meta あり → 通常クエリ（index 活用）
-  ├─ ids あり + meta なし → full scan で応答 + rebuild dispatch
+  ├─ ids あり → 通常クエリ（Loader::indexes() からインデックス構造を取得）
   ├─ ids なし → Loader 直撃 + rebuild dispatch
   └─ record 欠損 + ids にある → CacheInconsistencyException → rebuild
 ```
@@ -180,7 +180,7 @@ CacheProcessor
        └─ cursor() / select() — レコード取得・Self-Healing
 
 CacheRepository
-  ├─ 役割: テーブル単位のキャッシュ管理。ids / record / meta の取得・rebuild
+  ├─ 役割: テーブル単位のキャッシュ管理。ids / record の取得・rebuild
   ├─ 依存: StoreInterface, LoaderInterface
   └─ 責務:
        ├─ ids() — ids キーがなければ false
@@ -207,8 +207,7 @@ WhereEvaluator（Support）
 
 ```
 StoreInterface
-  └─ getMeta / putMeta
-     getIds / putIds
+  └─ getIds / putIds
      getRecord / putRecord
      getIndex / putIndex
      getCompositeIndex / putCompositeIndex
@@ -227,6 +226,26 @@ LoaderInterface
      version(): string|int|Stringable                バージョン識別子
 
 CsvLoader / EloquentLoader / QueryBuilderLoader は src/Loader/ に含まれる
+
+CsvLoader のファイル構成:
+  {tableDirectory}/
+    data.csv      — version カラム付きのデータ（必須）
+    defines.csv   — カラム名 → 型のマッピング
+    indexes.csv   — インデックス定義（省略可。省略時はコンストラクタ引数を使用）
+
+indexes.csv のフォーマット:
+  columns,unique
+  prefecture,false       — 単一カラムインデックス
+  email,true             — ユニークインデックス
+  country|type,false     — composite インデックス（| 区切り）
+
+自動発見（config: kura.csv.auto_discover = true）:
+  KuraServiceProvider が kura.csv.base_path 配下をスキャン。
+  data.csv を含むサブディレクトリが CsvLoader テーブルとして自動登録される。
+  versions.csv は base_path/versions.csv を共通で使用。
+  primary_key の上書き: config('kura.tables.{table}.primary_key')
+  注意: 新しいテーブルディレクトリを追加した場合は PHP プロセスの再起動が必要
+        （ServiceProvider の boot は起動時に1回だけ実行されるため）
 ```
 
 ### Index 層
@@ -239,7 +258,6 @@ IndexDefinition
 IndexBuilder
   └─ rebuild 時に index を構築
      buildSorted(): [[value, [ids]], ...] ソート済みリスト
-     buildChunked(): chunk 分割
      buildCompositeIndexes(): composite index hashmap
      composite 宣言時に各カラムの単カラム index も自動作成
 
@@ -339,6 +357,8 @@ id,name,price,version
 2,商品B,19.99,v1.0.0
 3,商品C,29.99,v1.1.0
 ```
+
+**空セルは `null` として扱われます。** `data.csv` の空セル（上記の行1の `version` カラムなど）はレコード内で `null` として保存されます。これは標準的な CSV の慣例に従っており、Kura 全体で使用している MySQL の NULL セマンティクスと一致しています。
 
 ### defines.csv
 

@@ -323,6 +323,169 @@ class CsvLoaderTest extends TestCase
         $this->assertCount(0, iterator_to_array($loader->load(), false));
     }
 
+    // =========================================================================
+    // indexes()
+    // =========================================================================
+
+    public function test_indexes_loads_from_indexes_csv(): void
+    {
+        // Arrange
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+        ]);
+        $this->writeCsv($this->tmpDir.'/products/indexes.csv',
+            ['columns', 'unique'],
+            [['name', 'false'], ['code', 'false']],
+        );
+
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+        );
+
+        // Act
+        $indexes = $loader->indexes();
+
+        // Assert — both indexes loaded from CSV
+        $this->assertCount(2, $indexes, 'indexes() should return 2 definitions from indexes.csv');
+        $this->assertSame(['name'], $indexes[0]['columns'], 'First index should be on name column');
+        $this->assertFalse($indexes[0]['unique'], 'name index should not be unique');
+        $this->assertSame(['code'], $indexes[1]['columns'], 'Second index should be on code column');
+    }
+
+    public function test_indexes_csv_with_composite_columns(): void
+    {
+        // Arrange
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+        ]);
+        $this->writeCsv($this->tmpDir.'/products/indexes.csv',
+            ['columns', 'unique'],
+            [['country|type', 'false']],
+        );
+
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+        );
+
+        // Act
+        $indexes = $loader->indexes();
+
+        // Assert — pipe-separated columns become a composite index
+        $this->assertCount(1, $indexes, 'Should have one composite index');
+        $this->assertSame(
+            ['country', 'type'],
+            $indexes[0]['columns'],
+            'Pipe-separated columns should be split into a list',
+        );
+        $this->assertFalse($indexes[0]['unique'], 'Composite index should not be unique');
+    }
+
+    public function test_indexes_csv_with_unique_index(): void
+    {
+        // Arrange
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+        ]);
+        $this->writeCsv($this->tmpDir.'/products/indexes.csv',
+            ['columns', 'unique'],
+            [['email', 'true']],
+        );
+
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+        );
+
+        // Act
+        $indexes = $loader->indexes();
+
+        // Assert — unique=true is correctly parsed
+        $this->assertCount(1, $indexes, 'Should have one unique index');
+        $this->assertTrue($indexes[0]['unique'], 'unique=true in CSV should result in unique:true');
+    }
+
+    public function test_constructor_index_definitions_take_precedence_over_csv(): void
+    {
+        // Arrange — both constructor arg and indexes.csv exist
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+        ]);
+        $this->writeCsv($this->tmpDir.'/products/indexes.csv',
+            ['columns', 'unique'],
+            [['from_csv', 'false']],
+        );
+
+        $constructorIndexes = [['columns' => ['from_constructor'], 'unique' => true]];
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            indexDefinitions: $constructorIndexes,
+        );
+
+        // Act
+        $indexes = $loader->indexes();
+
+        // Assert — constructor arg wins over indexes.csv
+        $this->assertCount(1, $indexes, 'Should use constructor definitions, not CSV');
+        $this->assertSame(
+            ['from_constructor'],
+            $indexes[0]['columns'],
+            'Constructor indexDefinitions should take precedence over indexes.csv',
+        );
+    }
+
+    public function test_indexes_returns_empty_when_no_csv_and_no_constructor_arg(): void
+    {
+        // Arrange — no indexes.csv, no constructor arg
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+        ]);
+        // indexes.csv intentionally not created
+
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+        );
+
+        // Act
+        $indexes = $loader->indexes();
+
+        // Assert
+        $this->assertSame([], $indexes, 'indexes() should return empty array when neither source exists');
+    }
+
+    public function test_indexes_csv_is_read_only_once_per_instance(): void
+    {
+        // Arrange
+        $this->writeVersionsCsv([
+            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
+        ]);
+        $this->writeCsv($this->tmpDir.'/products/indexes.csv',
+            ['columns', 'unique'],
+            [['name', 'false']],
+        );
+
+        $loader = new CsvLoader(
+            tableDirectory: $this->tmpDir.'/products',
+            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+        );
+
+        // Act — call twice, then overwrite the file to verify result is cached
+        $first = $loader->indexes();
+        file_put_contents($this->tmpDir.'/products/indexes.csv', "columns,unique\nmodified,true\n");
+        $second = $loader->indexes();
+
+        // Assert — second call returns cached result, not re-read from disk
+        $this->assertSame(
+            $first,
+            $second,
+            'indexes() should return cached result without re-reading the file',
+        );
+        $this->assertSame(['name'], $first[0]['columns'], 'Should reflect original CSV, not modified version');
+    }
+
     public function test_load_is_a_generator(): void
     {
         // Arrange

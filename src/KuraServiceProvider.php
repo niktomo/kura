@@ -13,6 +13,7 @@ use Kura\Http\Controllers\WarmController;
 use Kura\Http\Controllers\WarmStatusController;
 use Kura\Http\Middleware\KuraAuthMiddleware;
 use Kura\Jobs\RebuildCacheJob;
+use Kura\Loader\CsvLoader;
 use Kura\Loader\CsvVersionResolver;
 use Kura\Store\ApcuStore;
 use Kura\Store\StoreInterface;
@@ -64,19 +65,16 @@ class KuraServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(KuraManager::class, function ($app) {
-            /** @var array{ids?: int, record?: int, meta?: int, index?: int, ids_jitter?: int} $ttl */
+            /** @var array{ids?: int, record?: int, index?: int, ids_jitter?: int} $ttl */
             $ttl = $app['config']->get('kura.ttl', []);
-            /** @var int|null $chunkSize */
-            $chunkSize = $app['config']->get('kura.chunk_size');
             /** @var int $lockTtl */
             $lockTtl = $app['config']->get('kura.lock_ttl', 60);
-            /** @var array<string, array{ttl?: array{ids?: int, record?: int, meta?: int, index?: int, ids_jitter?: int}, chunk_size?: int|null}> $tableConfigs */
+            /** @var array<string, array{ttl?: array{ids?: int, record?: int, index?: int, ids_jitter?: int}}> $tableConfigs */
             $tableConfigs = $app['config']->get('kura.tables', []);
 
             return new KuraManager(
                 store: $app->make(StoreInterface::class),
                 defaultTtl: $ttl,
-                defaultChunkSize: $chunkSize,
                 lockTtl: $lockTtl,
                 rebuildDispatcher: $this->buildRebuildDispatcher(),
                 tableConfigs: $tableConfigs,
@@ -100,6 +98,72 @@ class KuraServiceProvider extends ServiceProvider
         }
 
         $this->registerWarmRoute();
+        $this->autoDiscoverCsvTables();
+    }
+
+    /**
+     * Scan base_path for table subdirectories and register each as a CsvLoader.
+     *
+     * Only directories that contain data.csv are registered.
+     * versions.csv is shared at base_path/versions.csv.
+     * Per-table primary_key can be overridden via config('kura.tables.{table}.primary_key').
+     */
+    private function autoDiscoverCsvTables(): void
+    {
+        /** @var \Illuminate\Config\Repository $config */
+        $config = $this->app->make('config');
+
+        if (! $config->get('kura.csv.auto_discover', false)) {
+            return;
+        }
+
+        /** @var string $basePath */
+        $basePath = $config->get('kura.csv.base_path', '');
+
+        if ($basePath === '' || ! is_dir($basePath)) {
+            return;
+        }
+
+        $versionsFile = $basePath.'/versions.csv';
+        /** @var int $cacheTtl */
+        $cacheTtl = $config->get('kura.version.cache_ttl', 300);
+
+        $inner = new CsvVersionResolver($versionsFile);
+        $resolver = $cacheTtl > 0 ? new CachedVersionResolver($inner, ttl: $cacheTtl) : $inner;
+
+        $manager = $this->app->make(KuraManager::class);
+        /** @var array<string, array{primary_key?: string}> $tableOverrides */
+        $tableOverrides = $config->get('kura.tables', []);
+
+        $entries = scandir($basePath);
+        if ($entries === false) {
+            return;
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $tableDir = $basePath.'/'.$entry;
+
+            if (! is_dir($tableDir) || ! file_exists($tableDir.'/data.csv')) {
+                continue;
+            }
+
+            $primaryKey = $tableOverrides[$entry]['primary_key'] ?? 'id';
+
+            $manager->register(
+                $entry,
+                function () use ($tableDir, $resolver): CsvLoader {
+                    return new CsvLoader(
+                        tableDirectory: $tableDir,
+                        resolver: $resolver,
+                    );
+                },
+                $primaryKey,
+            );
+        }
     }
 
     private function registerWarmRoute(): void

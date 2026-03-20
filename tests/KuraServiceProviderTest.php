@@ -104,6 +104,125 @@ class KuraServiceProviderTest extends TestCase
         $result->assertSuccessful();
     }
 
+    // -------------------------------------------------------------------------
+    // CSV auto-discovery
+    // -------------------------------------------------------------------------
+
+    public function test_auto_discover_registers_table_directories(): void
+    {
+        assert($this->app !== null);
+
+        // Given: a base_path with two table subdirectories each containing data.csv
+        $tmpDir = sys_get_temp_dir().'/kura_autodiscover_'.uniqid();
+        mkdir($tmpDir.'/products', recursive: true);
+        mkdir($tmpDir.'/countries', recursive: true);
+        touch($tmpDir.'/products/data.csv');
+        touch($tmpDir.'/countries/data.csv');
+        touch($tmpDir.'/versions.csv');
+
+        $this->app->make('config')->set('kura.csv.auto_discover', true);
+        $this->app->make('config')->set('kura.csv.base_path', $tmpDir);
+        $this->app->make('config')->set('kura.version.cache_ttl', 0);
+
+        // When: booting the service provider with the new config
+        (new KuraServiceProvider($this->app))->boot();
+
+        // Then: both tables are registered
+        $manager = $this->app->make(KuraManager::class);
+        $tables = $manager->registeredTables();
+        sort($tables);
+
+        $this->assertSame(
+            ['countries', 'products'],
+            $tables,
+            'Auto-discovery should register all subdirectories containing data.csv',
+        );
+
+        $this->removeDirectory($tmpDir);
+    }
+
+    public function test_auto_discover_skips_directories_without_data_csv(): void
+    {
+        assert($this->app !== null);
+
+        // Given: base_path with one valid table and one empty directory
+        $tmpDir = sys_get_temp_dir().'/kura_autodiscover_'.uniqid();
+        mkdir($tmpDir.'/products', recursive: true);
+        mkdir($tmpDir.'/not_a_table', recursive: true); // no data.csv
+        touch($tmpDir.'/products/data.csv');
+        touch($tmpDir.'/versions.csv');
+
+        $this->app->make('config')->set('kura.csv.auto_discover', true);
+        $this->app->make('config')->set('kura.csv.base_path', $tmpDir);
+        $this->app->make('config')->set('kura.version.cache_ttl', 0);
+
+        (new KuraServiceProvider($this->app))->boot();
+
+        $manager = $this->app->make(KuraManager::class);
+
+        $this->assertSame(
+            ['products'],
+            $manager->registeredTables(),
+            'Directories without data.csv should not be registered',
+        );
+
+        $this->removeDirectory($tmpDir);
+    }
+
+    public function test_auto_discover_respects_primary_key_override(): void
+    {
+        assert($this->app !== null);
+
+        // Given: a table with a non-default primary key override in config
+        $tmpDir = sys_get_temp_dir().'/kura_autodiscover_'.uniqid();
+        mkdir($tmpDir.'/products', recursive: true);
+        touch($tmpDir.'/products/data.csv');
+        touch($tmpDir.'/versions.csv');
+
+        $this->app->make('config')->set('kura.csv.auto_discover', true);
+        $this->app->make('config')->set('kura.csv.base_path', $tmpDir);
+        $this->app->make('config')->set('kura.version.cache_ttl', 0);
+        $this->app->make('config')->set('kura.tables.products.primary_key', 'product_code');
+
+        (new KuraServiceProvider($this->app))->boot();
+
+        $manager = $this->app->make(KuraManager::class);
+
+        $this->assertSame(
+            'product_code',
+            $manager->repository('products')->primaryKey(),
+            'primary_key override in config.tables should be respected',
+        );
+
+        $this->removeDirectory($tmpDir);
+    }
+
+    public function test_auto_discover_does_nothing_when_disabled(): void
+    {
+        assert($this->app !== null);
+
+        // Given: auto_discover is false (default)
+        $this->app->make('config')->set('kura.csv.auto_discover', false);
+
+        (new KuraServiceProvider($this->app))->boot();
+
+        $manager = $this->app->make(KuraManager::class);
+
+        $this->assertSame(
+            [],
+            $manager->registeredTables(),
+            'No tables should be registered when auto_discover is false',
+        );
+    }
+
+    private function removeDirectory(string $dir): void
+    {
+        foreach (glob($dir.'/*') ?: [] as $item) {
+            is_dir($item) ? $this->removeDirectory($item) : unlink($item);
+        }
+        rmdir($dir);
+    }
+
     public function test_version_resolver_is_bound(): void
     {
         assert($this->app !== null);

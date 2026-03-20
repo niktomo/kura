@@ -2,36 +2,50 @@
 
 namespace Kura\Index;
 
+use Kura\Exceptions\IndexInconsistencyException;
 use Kura\Store\StoreInterface;
 
 /**
  * Resolves candidate IDs from stored indexes using where conditions.
+ *
+ * Index structure (which columns are indexed, which composites exist) is
+ * provided at construction time from the Loader — not read from APCu meta.
  *
  * Returns null when the condition cannot be resolved via index (full scan needed).
  * Returns list<int|string> when IDs were successfully resolved.
  */
 final class IndexResolver
 {
+    /** @var array<string, true> */
+    private readonly array $indexedColumnsMap;
+
+    /**
+     * @param  array<string, true>  $indexedColumns  set of indexed column names
+     * @param  list<string>  $compositeNames  composite index names (e.g. 'country|type')
+     */
     public function __construct(
         private readonly StoreInterface $store,
         private readonly string $table,
         private readonly string $version,
-    ) {}
+        array $indexedColumns,
+        private readonly array $compositeNames,
+    ) {
+        $this->indexedColumnsMap = $indexedColumns;
+    }
 
     /**
      * Resolve candidate IDs for a single where condition.
      *
      * @param  array<string, mixed>  $where
-     * @param  array<string, mixed>  $meta
      * @return list<int|string>|null null = not index-resolvable
      */
-    public function resolveForWhere(array $where, array $meta): ?array
+    public function resolveForWhere(array $where): ?array
     {
         return match ($where['type']) {
-            'basic' => $this->resolveBasic($where, $meta),
-            'between' => $this->resolveBetween($where, $meta),
-            'in' => $this->resolveIn($where, $meta),
-            'rowValuesIn' => $this->resolveRowValuesIn($where, $meta),
+            'basic' => $this->resolveBasic($where),
+            'between' => $this->resolveBetween($where),
+            'in' => $this->resolveIn($where),
+            'rowValuesIn' => $this->resolveRowValuesIn($where),
             default => null,
         };
     }
@@ -50,17 +64,16 @@ final class IndexResolver
      * we cannot safely narrow (records matching only that branch would be missed).
      *
      * @param  list<array<string, mixed>>  $wheres
-     * @param  array<string, mixed>  $meta
      * @return list<int|string>|null null = cannot narrow (full scan needed)
      */
-    public function resolveIds(array $wheres, array $meta): ?array
+    public function resolveIds(array $wheres): ?array
     {
         if ($wheres === []) {
             return null;
         }
 
         // Try composite index lookup for AND equality conditions
-        $compositeResult = $this->tryCompositeIndex($wheres, $meta);
+        $compositeResult = $this->tryCompositeIndex($wheres);
         if ($compositeResult !== null) {
             return $compositeResult;
         }
@@ -74,7 +87,7 @@ final class IndexResolver
 
         foreach ($wheres as $where) {
             $boolean = $where['boolean'] ?? 'and';
-            $ids = $this->resolveForWhere($where, $meta);
+            $ids = $this->resolveForWhere($where);
 
             if ($ids === null) {
                 if ($boolean === 'or') {
@@ -124,67 +137,106 @@ final class IndexResolver
      * exactly match a registered composite index.
      *
      * @param  list<array<string, mixed>>  $wheres
-     * @param  array<string, mixed>  $meta
      * @return list<int|string>|null
      */
-    private function tryCompositeIndex(array $wheres, array $meta): ?array
+    private function tryCompositeIndex(array $wheres): ?array
     {
-        /** @var list<string> $compositeNames */
-        $compositeNames = $meta['composites'] ?? [];
-        if ($compositeNames === []) {
+        if ($this->compositeNames === []) {
             return null;
         }
 
-        // Collect AND equality conditions: column → value
-        /** @var array<string, mixed> $eqConditions */
-        $eqConditions = [];
+        // Collect AND conditions: column → single value (=) or value list (in)
+        // Any OR, NOT IN, or non-equality/non-in condition disqualifies composite resolution.
+        /** @var array<string, list<mixed>> $colValues column → list of candidate values */
+        $colValues = [];
         foreach ($wheres as $where) {
             $boolean = $where['boolean'] ?? 'and';
             if ($boolean !== 'and') {
-                return null; // OR mixed in — can't use composite
+                return null;
             }
-            if (($where['type'] ?? '') !== 'basic' || ($where['operator'] ?? '') !== '=') {
-                return null; // Non-equality — can't use composite
+            $type = $where['type'] ?? '';
+            if ($type === 'basic' && ($where['operator'] ?? '') === '=') {
+                /** @var string $column */
+                $column = $where['column'];
+                $colValues[$column] = [(string) $where['value']];
+            } elseif ($type === 'in' && ! $where['not']) {
+                /** @var string $column */
+                $column = $where['column'];
+                $colValues[$column] = array_map('strval', $where['values']);
+            } else {
+                return null;
             }
-            /** @var string $column */
-            $column = $where['column'];
-            $eqConditions[$column] = $where['value'];
         }
 
-        // Find a composite index that matches the condition columns
-        foreach ($compositeNames as $name) {
+        // Find a composite index whose columns are all covered by conditions
+        foreach ($this->compositeNames as $name) {
             $cols = explode('|', $name);
-            if (count($cols) !== count($eqConditions)) {
+            if (count($cols) !== count($colValues)) {
                 continue;
             }
 
-            // All composite columns must be present in conditions
             $allMatch = true;
-            $parts = [];
+            /** @var list<list<string>> $valueGroups */
+            $valueGroups = [];
             foreach ($cols as $col) {
-                if (! array_key_exists($col, $eqConditions)) {
+                if (! array_key_exists($col, $colValues)) {
                     $allMatch = false;
                     break;
                 }
-                $parts[] = (string) $eqConditions[$col];
+                $valueGroups[] = array_values($colValues[$col]);
             }
 
             if (! $allMatch) {
                 continue;
             }
 
-            // Fetch the composite index from store
+            // Fetch composite index once
             $map = $this->store->getCompositeIndex($this->table, $this->version, $name);
             if ($map === false) {
-                return null; // Index missing — fall back
+                throw new IndexInconsistencyException(
+                    "Composite index key missing for '{$name}' in table '{$this->table}' (declared in Loader but missing from APCu)",
+                    table: $this->table,
+                    column: $name,
+                );
             }
 
-            $combinedKey = implode('|', $parts);
+            // Cartesian product of value groups → hashmap key lookups
+            $ids = [];
+            foreach ($this->cartesian($valueGroups) as $combo) {
+                $key = implode('|', $combo);
+                foreach ($map[$key] ?? [] as $id) {
+                    $ids[] = $id;
+                }
+            }
 
-            return $map[$combinedKey] ?? [];
+            return array_values(array_unique($ids));
         }
 
-        return null; // No matching composite index
+        return null;
+    }
+
+    /**
+     * Compute the Cartesian product of a list of value groups.
+     *
+     * cartesian([['JP','US'], ['A','B']]) → [['JP','A'],['JP','B'],['US','A'],['US','B']]
+     *
+     * @param  list<list<string>>  $groups
+     * @return list<list<string>>
+     */
+    private function cartesian(array $groups): array
+    {
+        $result = [[]];
+        foreach ($groups as $group) {
+            $next = [];
+            foreach ($result as $existing) {
+                foreach ($group as $value) {
+                    $next[] = [...$existing, $value];
+                }
+            }
+            $result = $next;
+        }
+
+        return $result;
     }
 
     // -------------------------------------------------------------------------
@@ -199,10 +251,9 @@ final class IndexResolver
      * when no matching composite index exists or NOT IN is used.
      *
      * @param  array<string, mixed>  $where
-     * @param  array<string, mixed>  $meta
      * @return list<int|string>|null
      */
-    private function resolveRowValuesIn(array $where, array $meta): ?array
+    private function resolveRowValuesIn(array $where): ?array
     {
         if ($where['not']) {
             return null; // NOT IN cannot be accelerated via index
@@ -212,16 +263,17 @@ final class IndexResolver
         $columns = $where['columns'];
         $compositeName = implode('|', $columns);
 
-        /** @var list<string> $compositeNames */
-        $compositeNames = $meta['composites'] ?? [];
-
-        if (! in_array($compositeName, $compositeNames, true)) {
+        if (! in_array($compositeName, $this->compositeNames, true)) {
             return null; // No matching composite index
         }
 
         $map = $this->store->getCompositeIndex($this->table, $this->version, $compositeName);
         if ($map === false) {
-            return null;
+            throw new IndexInconsistencyException(
+                "Composite index key missing for '{$compositeName}' in table '{$this->table}' (declared in Loader but missing from APCu)",
+                table: $this->table,
+                column: $compositeName,
+            );
         }
 
         /** @var array<int|string, true> $idSet */
@@ -242,16 +294,15 @@ final class IndexResolver
 
     /**
      * @param  array<string, mixed>  $where
-     * @param  array<string, mixed>  $meta
      * @return list<int|string>|null
      */
-    private function resolveBasic(array $where, array $meta): ?array
+    private function resolveBasic(array $where): ?array
     {
         $column = $where['column'];
         $operator = $where['operator'];
         $value = $where['value'];
 
-        if (! $this->isIndexed($column, $meta)) {
+        if (! $this->isIndexed($column)) {
             return null;
         }
 
@@ -260,17 +311,14 @@ final class IndexResolver
             return null;
         }
 
-        $indexMeta = $meta['indexes'][$column];
-
-        return $this->searchIndex($column, $indexMeta, $operator, $value);
+        return $this->searchIndex($column, $operator, $value);
     }
 
     /**
      * @param  array<string, mixed>  $where
-     * @param  array<string, mixed>  $meta
      * @return list<int|string>|null
      */
-    private function resolveBetween(array $where, array $meta): ?array
+    private function resolveBetween(array $where): ?array
     {
         if ($where['not']) {
             return null;
@@ -278,21 +326,18 @@ final class IndexResolver
 
         $column = $where['column'];
 
-        if (! $this->isIndexed($column, $meta)) {
+        if (! $this->isIndexed($column)) {
             return null;
         }
 
-        $indexMeta = $meta['indexes'][$column];
-
-        return $this->searchIndexBetween($column, $indexMeta, $where['values'][0], $where['values'][1]);
+        return $this->searchIndexBetween($column, $where['values'][0], $where['values'][1]);
     }
 
     /**
      * @param  array<string, mixed>  $where
-     * @param  array<string, mixed>  $meta
      * @return list<int|string>|null
      */
-    private function resolveIn(array $where, array $meta): ?array
+    private function resolveIn(array $where): ?array
     {
         if ($where['not']) {
             return null;
@@ -300,20 +345,23 @@ final class IndexResolver
 
         $column = $where['column'];
 
-        if (! $this->isIndexed($column, $meta)) {
+        if (! $this->isIndexed($column)) {
             return null;
         }
 
-        $indexMeta = $meta['indexes'][$column];
+        // Fetch index once, then binary-search all values in memory
+        $entries = $this->store->getIndex($this->table, $this->version, $column);
 
-        // IN → union of equal searches for each value
+        if ($entries === false) {
+            throw new IndexInconsistencyException(
+                "Index key missing for column '{$column}' in table '{$this->table}' (declared in Loader but missing from APCu)",
+            );
+        }
+
         $allIds = [];
         foreach ($where['values'] as $value) {
-            $ids = $this->searchIndex($column, $indexMeta, '=', $value);
-            if ($ids !== null) {
-                foreach ($ids as $id) {
-                    $allIds[] = $id;
-                }
+            foreach (BinarySearch::equal($entries, $value) as $id) {
+                $allIds[] = $id;
             }
         }
 
@@ -325,83 +373,18 @@ final class IndexResolver
     // -------------------------------------------------------------------------
 
     /**
-     * @param  array<int, array{min: mixed, max: mixed}>|array{}  $indexMeta
      * @return list<int|string>|null
      */
-    private function searchIndex(string $column, array $indexMeta, string $operator, mixed $value): ?array
+    private function searchIndex(string $column, string $operator, mixed $value): ?array
     {
-        if ($indexMeta === []) {
-            // No chunks — single index key
-            return $this->searchEntries($column, null, $operator, $value);
-        }
-
-        // Chunked — find relevant chunks by min/max
-        $allIds = [];
-        foreach ($indexMeta as $chunkIndex => $chunk) {
-            if (! $this->chunkOverlaps($chunk, $operator, $value)) {
-                continue;
-            }
-
-            $ids = $this->searchEntries($column, $chunkIndex, $operator, $value);
-            if ($ids === null) {
-                return null;
-            }
-
-            foreach ($ids as $id) {
-                $allIds[] = $id;
-            }
-        }
-
-        return $allIds;
-    }
-
-    /**
-     * @param  array<int, array{min: mixed, max: mixed}>|array{}  $indexMeta
-     * @return list<int|string>|null
-     */
-    private function searchIndexBetween(string $column, array $indexMeta, mixed $min, mixed $max): ?array
-    {
-        if ($indexMeta === []) {
-            $entries = $this->store->getIndex($this->table, $this->version, $column);
-
-            if ($entries === false) {
-                return null;
-            }
-
-            return BinarySearch::between($entries, $min, $max);
-        }
-
-        // Chunked — find relevant chunks
-        $allIds = [];
-        foreach ($indexMeta as $chunkIndex => $chunk) {
-            // Chunk overlaps with [min, max] if chunk.max >= min && chunk.min <= max
-            if ($chunk['max'] < $min || $chunk['min'] > $max) {
-                continue;
-            }
-
-            $entries = $this->store->getIndex($this->table, $this->version, $column, $chunkIndex);
-            if ($entries === false) {
-                return null;
-            }
-
-            $ids = BinarySearch::between($entries, $min, $max);
-            foreach ($ids as $id) {
-                $allIds[] = $id;
-            }
-        }
-
-        return $allIds;
-    }
-
-    /**
-     * @return list<int|string>|null
-     */
-    private function searchEntries(string $column, ?int $chunk, string $operator, mixed $value): ?array
-    {
-        $entries = $this->store->getIndex($this->table, $this->version, $column, $chunk);
+        $entries = $this->store->getIndex($this->table, $this->version, $column);
 
         if ($entries === false) {
-            return null;
+            throw new IndexInconsistencyException(
+                "Index key missing for column '{$column}' in table '{$this->table}' (declared in Loader but missing from APCu)",
+                table: $this->table,
+                column: $column,
+            );
         }
 
         return match ($operator) {
@@ -414,32 +397,30 @@ final class IndexResolver
         };
     }
 
+    /**
+     * @return list<int|string>
+     */
+    private function searchIndexBetween(string $column, mixed $min, mixed $max): array
+    {
+        $entries = $this->store->getIndex($this->table, $this->version, $column);
+
+        if ($entries === false) {
+            throw new IndexInconsistencyException(
+                "Index key missing for column '{$column}' in table '{$this->table}' (declared in Loader but missing from APCu)",
+                table: $this->table,
+                column: $column,
+            );
+        }
+
+        return BinarySearch::between($entries, $min, $max);
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
-    /**
-     * @param  array<string, mixed>  $meta
-     */
-    private function isIndexed(string $column, array $meta): bool
+    private function isIndexed(string $column): bool
     {
-        return isset($meta['indexes'][$column]);
-    }
-
-    /**
-     * Check if a chunk's [min, max] range could contain results for the given operator and value.
-     *
-     * @param  array{min: mixed, max: mixed}  $chunk
-     */
-    private function chunkOverlaps(array $chunk, string $operator, mixed $value): bool
-    {
-        return match ($operator) {
-            '=' => $value >= $chunk['min'] && $value <= $chunk['max'],
-            '>' => $chunk['max'] > $value,
-            '>=' => $chunk['max'] >= $value,
-            '<' => $chunk['min'] < $value,
-            '<=' => $chunk['min'] <= $value,
-            default => true,
-        };
+        return isset($this->indexedColumnsMap[$column]);
     }
 }

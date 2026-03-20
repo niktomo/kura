@@ -5,6 +5,11 @@
 
 # Kura
 
+[![Tests](https://github.com/tomonori/kura/actions/workflows/tests.yml/badge.svg)](https://github.com/tomonori/kura/actions/workflows/tests.yml)
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/tomonori/kura.svg)](https://packagist.org/packages/tomonori/kura)
+[![PHP Version](https://img.shields.io/badge/php-%5E8.2-blue)](https://www.php.net/)
+[![License](https://img.shields.io/github/license/tomonori/kura)](LICENSE)
+
 **Kura**（蔵）は、リファレンスデータを APCu にキャッシュし、**Laravel QueryBuilder 互換の API** で検索できる Laravel パッケージです。
 
 CSV や DB からデータを一度読み込み、APCu に保存し、いつもの fluent API でクエリ — **実行時の DB クエリは不要**です。インデックスによる高速化でサブミリ秒のレスポンスを実現します。
@@ -72,6 +77,7 @@ data/
 ├── versions.csv           # 共通のバージョン管理
 └── stations/
     ├── defines.csv        # カラム定義
+    ├── indexes.csv        # インデックス定義（省略可）
     └── data.csv           # データ本体（version カラム必須）
 ```
 
@@ -98,6 +104,20 @@ version,string,データバージョン（必須）
 ```
 
 サポートする型: `int`, `float`, `bool`, `string`
+
+**stations/indexes.csv** — 省略可。高速検索するカラムのインデックスを定義:
+```csv
+columns,unique
+prefecture,false
+line_id,false
+prefecture|city,false
+```
+
+- `columns`: カラム名。composite インデックスは `|` 区切り
+- `unique`: `true` / `false`
+- composite インデックス（`col1|col2`）は複数カラムの等値検索を O(1) で解決
+
+> **補足:** `indexes.csv` を省略した場合は `CsvLoader` コンストラクタの `indexDefinitions` 引数で直接指定できます（[テーブルを登録する](#3-テーブルを登録する) 参照）。
 
 **stations/data.csv** — データ本体（`version` カラムあり）:
 ```csv
@@ -152,6 +172,44 @@ class MyApiLoader implements LoaderInterface
 詳細は [独自 Loader の実装](docs/overview-ja.md#独自-loader-の実装) を参照。
 
 ### 3. テーブルを登録する
+
+#### パターン A: 自動発見（CSV のみ）
+
+CSV ファイルを使う場合の最も簡単な方法です。Kura が指定ディレクトリを自動スキャンし、`data.csv` を含むサブディレクトリをテーブルとして自動登録します。`AppServiceProvider` へのコード追加不要。
+
+```php
+// config/kura.php
+'csv' => [
+    'base_path'     => storage_path('reference'),  // スキャン対象ディレクトリ
+    'auto_discover' => true,
+],
+```
+
+```
+storage/reference/
+├── versions.csv        # 共通のバージョン管理
+├── stations/
+│   ├── data.csv
+│   ├── defines.csv
+│   └── indexes.csv
+└── lines/
+    ├── data.csv
+    ├── defines.csv
+    └── indexes.csv
+```
+
+これだけで `stations` と `lines` が自動登録されます。primary key を変更したいテーブルだけ config で上書き:
+
+```php
+// config/kura.php
+'tables' => [
+    'products' => ['primary_key' => 'product_code'],
+],
+```
+
+> **注意:** 新しいテーブルディレクトリを追加した場合は PHP プロセスの再起動が必要です（Octane なら `php artisan octane:restart`、PHP-FPM なら reload）。ディレクトリスキャンは起動時に1回だけ実行されるためです。既存テーブルのデータ更新（data.csv の差し替え）は PHP 再起動は不要ですが、`php artisan kura:rebuild` の実行が必要です。ファイル変更の自動検知機能はなく、Self-Healing は APCu の TTL 切れ時にのみ発動します。
+
+#### パターン B: 手動登録
 
 `AppServiceProvider`（または専用のサービスプロバイダ）で:
 
@@ -245,10 +303,8 @@ $stations = Kura::table('stations')
 
 ```
 kura:stations:v1.0.0:ids                    # 全 ID リスト
-kura:stations:v1.0.0:meta                   # カラム定義 + インデックス構造
 kura:stations:v1.0.0:record:1               # 1レコード
 kura:stations:v1.0.0:idx:prefecture         # 検索インデックス（単カラム）
-kura:stations:v1.0.0:idx:price:0            # チャンクインデックス（大規模データ）
 kura:stations:v1.0.0:cidx:prefecture|city   # composite index（O(1) 複合カラム検索）
 ```
 
@@ -295,6 +351,7 @@ Kura は Laravel QueryBuilder の約99メソッドを実装しています。完
 | [キャッシュアーキテクチャ](docs/cache-architecture-ja.md) / [English](docs/cache-architecture.md) | 内部設計: TTL、Self-Healing、rebuild フロー |
 | [概要](docs/overview-ja.md) / [English](docs/overview.md) | クラス構成と責務 |
 | [Laravel Builder カバレッジ](docs/laravel-builder-coverage-ja.md) / [English](docs/laravel-builder-coverage.md) | 完全な API 対応表 |
+| [トラブルシューティング](docs/troubleshooting-ja.md) / [English](docs/troubleshooting.md) | APCu 問題・クエリ遅延・マルチサーバー構成 |
 
 ## 設定
 
@@ -311,22 +368,23 @@ Kura は Laravel QueryBuilder の約99メソッドを実装しています。完
 
 ## ベンチマーク
 
-Apple M4 Pro / PHP 8.4 / APCu 5.1.28（`apc.shm_size=256M`）で計測。
+Apple M4 Pro / PHP 8.4.19 / APCu 5.1.28（`apc.shm_size=256M`）で計測。
 各シナリオ 500 イテレーション、p95 レイテンシを掲載。
 
 | シナリオ | 1K件 | 10K件 | 100K件 |
 |---|---|---|---|
-| `find($id)` — 1件取得 | **0.7 µs** | **0.7 µs** | **0.7 µs** |
-| `where('country','JP')` — インデックス `=` | **136 µs** | **1.4 ms** | **16 ms** |
-| `where('country','JP')->where('category','...')` — composite index | **96 µs** | **947 µs** | **11 ms** |
-| `whereBetween('price', [50,100])` — 範囲インデックス | **180 µs** | **1.7 ms** | **17 ms** |
-| `where('active', true)` — 非インデックス（全走査） | 478 µs | 4.9 ms | 50 ms |
-| `where(...)->orderBy('price')` — インデックス + ソート | 284 µs | 3.6 ms | 47 ms |
-| `get()` — 全件取得 | 392 µs | 3.9 ms | 40 ms |
-| キャッシュ構築（`rebuild()`） | 8.9 ms | 12.9 ms | 135 ms |
+| `find($id)` — 1件取得 | **0.9 µs** | **0.8 µs** | **0.9 µs** |
+| `where('country','JP')` — インデックス `=` | **139 µs** | **1.3 ms** | **16 ms** |
+| `where('country','JP')->where('category','...')` — composite index | **105 µs** | **984 µs** | **11 ms** |
+| `whereBetween('price', [50,100])` — 範囲インデックス | **181 µs** | **1.7 ms** | **18 ms** |
+| `where(...)->orderBy('price')->get()` — インデックスウォーク | **190 µs** | **1.7 ms** | **21 ms** |
+| `where('active', true)` — 非インデックス（全走査） | 477 µs | 4.8 ms | 52 ms |
+| `get()` — 全件取得 | 379 µs | 3.7 ms | 40 ms |
+| キャッシュ構築（`rebuild()`） | 3.9 ms | 11.8 ms | 115 ms |
 
 インデックスを活用するクエリ（**太字**）は全走査より 3〜5倍高速。
-100K件でも、インデックスありなら 20ms 以下で応答します。
+100K件でも、インデックスありなら 21 ms 以下で応答します。
+`orderBy` にインデックス列を指定すると、APCu に保存済みのソート済みインデックスをそのまま走査（インデックスウォーク）— PHP ソート不要。
 
 > Docker 環境で `php benchmarks/benchmark.php` を実行して再現できます。
 

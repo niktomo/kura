@@ -22,19 +22,9 @@ class ApcuStore implements StoreInterface
         return "{$this->prefix}:{$table}:{$version}:record:{$id}";
     }
 
-    public function metaKey(string $table, string $version): string
+    public function indexKey(string $table, string $version, string $column): string
     {
-        return "{$this->prefix}:{$table}:{$version}:meta";
-    }
-
-    public function indexKey(string $table, string $version, string $column, ?int $chunk = null): string
-    {
-        $key = "{$this->prefix}:{$table}:{$version}:idx:{$column}";
-        if ($chunk !== null) {
-            $key .= ":{$chunk}";
-        }
-
-        return $key;
+        return "{$this->prefix}:{$table}:{$version}:idx:{$column}";
     }
 
     public function compositeIndexKey(string $table, string $version, string $name): string
@@ -78,39 +68,23 @@ class ApcuStore implements StoreInterface
     }
 
     // -------------------------------------------------------------------------
-    // StoreInterface — Meta
-    // -------------------------------------------------------------------------
-
-    /** @return array<string, mixed>|false */
-    public function getMeta(string $table, string $version): array|false
-    {
-        return apcu_fetch($this->metaKey($table, $version));
-    }
-
-    /** @param array<string, mixed> $meta */
-    public function putMeta(string $table, string $version, array $meta, int $ttl): void
-    {
-        apcu_store($this->metaKey($table, $version), $meta, $ttl);
-    }
-
-    // -------------------------------------------------------------------------
     // StoreInterface — Index
     // -------------------------------------------------------------------------
 
     /**
      * @return list<array{mixed, list<int|string>}>|false
      */
-    public function getIndex(string $table, string $version, string $column, ?int $chunk = null): array|false
+    public function getIndex(string $table, string $version, string $column): array|false
     {
-        return apcu_fetch($this->indexKey($table, $version, $column, $chunk));
+        return apcu_fetch($this->indexKey($table, $version, $column));
     }
 
     /**
      * @param  list<array{mixed, list<int|string>}>  $entries
      */
-    public function putIndex(string $table, string $version, string $column, array $entries, int $ttl, ?int $chunk = null): void
+    public function putIndex(string $table, string $version, string $column, array $entries, int $ttl): void
     {
-        apcu_store($this->indexKey($table, $version, $column, $chunk), $entries, $ttl);
+        apcu_store($this->indexKey($table, $version, $column), $entries, $ttl);
     }
 
     // -------------------------------------------------------------------------

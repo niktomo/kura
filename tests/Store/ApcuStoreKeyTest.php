@@ -44,30 +44,12 @@ class ApcuStoreKeyTest extends TestCase
         );
     }
 
-    public function test_meta_key(): void
-    {
-        $this->assertSame(
-            'kura:users:v1:meta',
-            $this->store->metaKey('users', 'v1'),
-            'meta key should include prefix, table, and version',
-        );
-    }
-
     public function test_index_key_single_column(): void
     {
         $this->assertSame(
             'kura:users:v1:idx:status',
             $this->store->indexKey('users', 'v1', 'status'),
             'index key for single column should include prefix, table, version, and column',
-        );
-    }
-
-    public function test_index_key_with_chunk(): void
-    {
-        $this->assertSame(
-            'kura:users:v1:idx:status:0',
-            $this->store->indexKey('users', 'v1', 'status', 0),
-            'index key with chunk should include chunk number suffix',
         );
     }
 

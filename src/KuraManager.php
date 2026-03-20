@@ -14,7 +14,7 @@ use Kura\Store\StoreInterface;
  */
 class KuraManager
 {
-    /** @var array<string, array{loader: LoaderInterface, primaryKey: string}> */
+    /** @var array<string, array{loader: LoaderInterface|\Closure(): LoaderInterface, primaryKey: string}> */
     private array $tables = [];
 
     /** @var array<string, CacheRepository> */
@@ -26,22 +26,27 @@ class KuraManager
     private ?string $versionOverride = null;
 
     /**
-     * @param  array{ids?: int, record?: int, meta?: int, index?: int, ids_jitter?: int}  $defaultTtl
-     * @param  array<string, array{ttl?: array{ids?: int, record?: int, meta?: int, index?: int, ids_jitter?: int}, chunk_size?: int|null}>  $tableConfigs
+     * @param  array{ids?: int, record?: int, index?: int, ids_jitter?: int}  $defaultTtl
+     * @param  array<string, array{ttl?: array{ids?: int, record?: int, index?: int, ids_jitter?: int}}>  $tableConfigs
      */
     public function __construct(
         private readonly StoreInterface $store,
         private readonly array $defaultTtl = [],
-        private readonly ?int $defaultChunkSize = null,
         private readonly int $lockTtl = 60,
         private readonly ?\Closure $rebuildDispatcher = null,
         private readonly array $tableConfigs = [],
     ) {}
 
     /**
-     * Register a table with its loader.
+     * Register a table with its loader or a factory closure.
+     *
+     * Passing a Closure defers instantiation until the table is first accessed,
+     * which avoids unnecessary DB connections for tables that are never queried
+     * in a given request.
+     *
+     * @param  LoaderInterface|\Closure(): LoaderInterface  $loader
      */
-    public function register(string $table, LoaderInterface $loader, string $primaryKey = 'id'): void
+    public function register(string $table, LoaderInterface|\Closure $loader, string $primaryKey = 'id'): void
     {
         $this->tables[$table] = [
             'loader' => $loader,
@@ -70,22 +75,36 @@ class KuraManager
     public function repository(string $table): CacheRepository
     {
         if (! isset($this->repositories[$table])) {
-            $config = $this->tables[$table] ?? null;
-
-            if ($config === null) {
+            if (! isset($this->tables[$table])) {
                 throw new \InvalidArgumentException("Table '{$table}' is not registered with Kura.");
             }
 
             $this->repositories[$table] = new CacheRepository(
                 table: $table,
-                primaryKey: $config['primaryKey'],
+                primaryKey: $this->tables[$table]['primaryKey'],
                 store: $this->store,
-                loader: $config['loader'],
+                loader: $this->resolveLoader($table),
                 versionOverride: $this->versionOverride,
             );
         }
 
         return $this->repositories[$table];
+    }
+
+    /**
+     * Resolve the loader for a table, invoking the factory closure if needed.
+     * The resolved instance is cached back into $tables to avoid re-invoking.
+     */
+    private function resolveLoader(string $table): LoaderInterface
+    {
+        $loader = $this->tables[$table]['loader'];
+
+        if ($loader instanceof \Closure) {
+            $loader = ($loader)();
+            $this->tables[$table]['loader'] = $loader;
+        }
+
+        return $loader;
     }
 
     /**
@@ -111,13 +130,11 @@ class KuraManager
     {
         $tableConfig = $this->tableConfigs[$table] ?? [];
 
-        /** @var array{ids?: int, record?: int, meta?: int, index?: int, ids_jitter?: int} $ttl */
+        /** @var array{ids?: int, record?: int, index?: int, ids_jitter?: int} $ttl */
         $ttl = array_merge($this->defaultTtl, $tableConfig['ttl'] ?? []);
-        $chunkSize = $tableConfig['chunk_size'] ?? $this->defaultChunkSize;
 
         $this->repository($table)->rebuild(
             ttl: $ttl,
-            chunkSize: $chunkSize,
             lockTtl: $this->lockTtl,
         );
     }

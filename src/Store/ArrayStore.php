@@ -13,9 +13,6 @@ class ArrayStore implements StoreInterface
     /** @var array<string, array<string, array<string, mixed>>> */
     private array $records = [];
 
-    /** @var array<string, array<string, mixed>> */
-    private array $meta = [];
-
     /** @var array<string, list<array{mixed, list<int|string>}>> */
     private array $indexes = [];
 
@@ -62,37 +59,15 @@ class ArrayStore implements StoreInterface
     }
 
     // -------------------------------------------------------------------------
-    // Meta
-    // -------------------------------------------------------------------------
-
-    /** @return array<string, mixed>|false */
-    public function getMeta(string $table, string $version): array|false
-    {
-        $key = "{$table}:{$version}:meta";
-
-        return $this->meta[$key] ?? false;
-    }
-
-    /** @param array<string, mixed> $meta */
-    public function putMeta(string $table, string $version, array $meta, int $ttl): void
-    {
-        $key = "{$table}:{$version}:meta";
-        $this->meta[$key] = $meta;
-    }
-
-    // -------------------------------------------------------------------------
     // Index
     // -------------------------------------------------------------------------
 
     /**
      * @return list<array{mixed, list<int|string>}>|false
      */
-    public function getIndex(string $table, string $version, string $column, ?int $chunk = null): array|false
+    public function getIndex(string $table, string $version, string $column): array|false
     {
         $key = "{$table}:{$version}:idx:{$column}";
-        if ($chunk !== null) {
-            $key .= ":{$chunk}";
-        }
 
         return $this->indexes[$key] ?? false;
     }
@@ -100,12 +75,9 @@ class ArrayStore implements StoreInterface
     /**
      * @param  list<array{mixed, list<int|string>}>  $entries
      */
-    public function putIndex(string $table, string $version, string $column, array $entries, int $ttl, ?int $chunk = null): void
+    public function putIndex(string $table, string $version, string $column, array $entries, int $ttl): void
     {
         $key = "{$table}:{$version}:idx:{$column}";
-        if ($chunk !== null) {
-            $key .= ":{$chunk}";
-        }
         $this->indexes[$key] = $entries;
     }
 
@@ -164,23 +136,15 @@ class ArrayStore implements StoreInterface
     {
         $prefix = "{$table}:{$version}";
 
-        // ids
         unset($this->ids["{$prefix}:ids"]);
-
-        // records
         unset($this->records[$prefix]);
 
-        // meta
-        unset($this->meta["{$prefix}:meta"]);
-
-        // indexes - remove all keys starting with prefix
         foreach (array_keys($this->indexes) as $key) {
             if (str_starts_with($key, "{$prefix}:idx:")) {
                 unset($this->indexes[$key]);
             }
         }
 
-        // composite indexes
         foreach (array_keys($this->compositeIndexes) as $key) {
             if (str_starts_with($key, "{$prefix}:cidx:")) {
                 unset($this->compositeIndexes[$key]);

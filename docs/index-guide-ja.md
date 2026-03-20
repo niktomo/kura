@@ -48,79 +48,6 @@ Kura のソート済みインデックスは二分探索により範囲クエリ
 
 ---
 
-## チャンク分割（大規模データセット）
-
-カラムのユニーク値が多い場合、インデックス全体を APCu から読み込むのは無駄です。Kura は大きなインデックスを**チャンク**に分割 — min/max 範囲を meta に保持する小さなセグメントにします。
-
-### 設定
-
-```php
-// config/kura.php — グローバル設定
-'chunk_size' => 5000,  // 1チャンクあたりのユニーク値の数
-
-// テーブル単位のオーバーライド
-'tables' => [
-    'stations' => [
-        'chunk_size' => 10000,
-    ],
-],
-```
-
-`chunk_size` はレコード数ではなく**ユニーク値の数**です。
-
-### 動作
-
-```php
-// meta にチャンクの範囲を保存
-kura:stations:v1.0.0:meta → [
-    'indexes' => [
-        'price' => [
-            ['min' => 100,  'max' => 500],    // chunk 0
-            ['min' => 501,  'max' => 1000],   // chunk 1
-            ['min' => 1001, 'max' => 3000],   // chunk 2
-        ],
-    ],
-]
-
-// 各チャンクは別々の APCu キー
-kura:stations:v1.0.0:idx:price:0 → [
-    [100, [3, 7]],
-    [200, [1, 12]],
-    [500, [6, 9, 15]],
-]
-kura:stations:v1.0.0:idx:price:1 → [
-    [501, [2, 5]],
-    [700, [8, 14]],
-    [1000, [4, 11]],
-]
-```
-
-### チャンクを使ったクエリ
-
-```
-where('price', '=', 700)
-  └─ meta → chunk 1 (501〜1000) がマッチ
-       └─ chunk 1 のみ取得 → 二分探索 → [8, 14]
-
-where('price', '>', 800)
-  └─ meta → chunk 1 + chunk 2 がオーバーラップ
-       └─ 両チャンクを取得 → 各チャンク内で二分探索 → ID を収集
-
-where('price', 'BETWEEN', [200, 600])
-  └─ meta → chunk 0 + chunk 1 がオーバーラップ
-       └─ 両方を取得 → 各チャンク内で範囲 slice → ID を収集
-```
-
-関連するチャンクのみ APCu から読み込み — インデックス全体を読む必要はありません。
-
-### ルール
-
-- **同一値は必ず同じチャンクに収まる**（チャンク境界をまたがない）
-- チャンクは rebuild 時に構築される（クエリ時ではない）
-- `null` = チャンクなし（カラムごとに単一キー）
-
----
-
 ## Composite Index
 
 **複合カラムの AND equality** を O(1) で解決するための hashmap。
@@ -264,17 +191,11 @@ $loader = new CsvLoader(
     ],
 );
 
-// Config: 大きなインデックスをチャンク分割
-'tables' => [
-    'stations' => [
-        'chunk_size' => 1000,  // 1000以上のユニーク値があればインデックスを分割
-    ],
-],
 ```
 
 作成されるインデックス:
-- `idx:prefecture` — 47エントリ、チャンク不要
-- `idx:line_id` — 300エントリ、チャンク不要
+- `idx:prefecture` — 47エントリ（APCu 単一キー）
+- `idx:line_id` — 300エントリ（APCu 単一キー）
 - `cidx:prefecture|line_id` — O(1) composite hashmap
 
 恩恵を受けるクエリ:
@@ -296,3 +217,74 @@ Kura::table('stations')
 // 'name' にインデックスなし → full scan（正しい結果だが遅い）
 Kura::table('stations')->where('name', 'Tokyo')->get();
 ```
+
+---
+
+## インデックス戦略
+
+### どのカラムをインデックスするか
+
+`where` 条件に頻出し、**セレクティビティが高い**（値が結果件数を大きく絞れる）カラムにインデックスを付けます。
+
+| カラムの種類 | インデックス | 理由 |
+|---|---|---|
+| コード・スラッグ（一意識別子） | ✅ unique | O(1) の単一レコード取得 |
+| 外部キー・カテゴリ（国、ステータス） | ✅ non-unique | カーディナリティで走査を削減 |
+| boolean フラグ（active, deleted） | ❌ ほぼ無意味 | 値が2種類 → セレクティビティが低く結果件数が多い |
+| 自由文（name, description） | ❌ | LIKE は full scan になるため不要 |
+| 数値範囲（price, age） | ✅ `>` / `BETWEEN` で使う場合 | 二分探索で範囲 slice |
+
+### composite index を付けるべきとき
+
+**AND equality で2カラムが常に一緒に使われ**、どちらか1カラムだけでは十分に絞れない場合に composite index を追加します。
+
+```php
+// composite の有力候補 — 常に一緒に使われる
+->where('prefecture', 'Tokyo')->where('line_id', 1)
+
+// 向いていない — prefecture だけで十分絞れる
+->where('prefecture', 'Tokyo')->where('active', true)
+```
+
+2カラムが存在するからといって安易に composite index を付けないでください。コストがあります：
+
+- rebuild 時に多くの APCu キーが書き込まれる
+- composite hashmap は全ユニーク組み合わせを保持する — カーディナリティが高いと巨大になり、デシリアライズコストが高くなる
+
+### カーディナリティと composite index の効率
+
+composite index が最も効果的なのは、**組み合わせのカーディナリティが個別カラムよりも低い**場合です。
+
+```
+prefecture: 47 値
+line_id: 300 値
+有効な組み合わせ: ~900（多くの駅は特定の都道府県・路線に集中）
+→ 良い: composite で直接小さな結果セットに絞れる
+```
+
+```
+user_id: 100,000 値
+product_id: 50,000 値
+有効な組み合わせ: 数百万
+→ 悪い: hashmap が巨大になり full scan の方が速い場合がある
+```
+
+目安：**組み合わせ数が ~10,000 以下なら composite index は効果的**。
+
+### composite index が逆効果になるケース
+
+クエリが**データセットの大部分にマッチする**場合、composite index の優位性がなくなります：
+
+- hashmap を全件デシリアライズしてからルックアップする
+- マッチした全 ID を APCu から1件ずつフェッチするコストは変わらない
+- 順次アクセスする full scan の方がデシリアライズオーバーヘッドがない分速いことがある
+
+**例**：`whereRowValuesIn` のタプルが全レコードの 80% 以上にマッチする場合、composite index を使わず単カラム index + WhereEvaluator フィルタリングに任せる。
+
+### 3カラム以上の composite
+
+Kura は 3カラム以上の composite index をサポートしますが、費用対効果は低い場合がほとんどです：
+
+- 組み合わせ空間が指数的に増加する
+- 各カラムの単カラム index は自動生成されるため、それ + WhereEvaluator で十分なことが多い
+- 組み合わせ数が証明できる範囲で少なく、高頻度の特定検索パターンがある場合に限り検討する

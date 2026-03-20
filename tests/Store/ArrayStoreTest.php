@@ -102,30 +102,6 @@ class ArrayStoreTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // Meta
-    // -------------------------------------------------------------------------
-
-    public function test_get_meta_returns_false_when_not_stored(): void
-    {
-        $this->assertFalse(
-            $this->store->getMeta('users', $this->version),
-            'getMeta should return false when no meta has been stored',
-        );
-    }
-
-    public function test_get_meta_returns_stored_meta(): void
-    {
-        $meta = ['columns' => ['id' => 'int', 'name' => 'string'], 'indexes' => []];
-        $this->store->putMeta('users', $this->version, $meta, 3600);
-
-        $this->assertSame(
-            $meta,
-            $this->store->getMeta('users', $this->version),
-            'getMeta should return the exact meta that was stored',
-        );
-    }
-
-    // -------------------------------------------------------------------------
     // Index
     // -------------------------------------------------------------------------
 
@@ -147,27 +123,6 @@ class ArrayStoreTest extends TestCase
             $entries,
             $this->store->getIndex('users', $this->version, 'status'),
             'getIndex should return the exact entries that were stored',
-        );
-    }
-
-    public function test_index_with_chunk_is_stored_separately(): void
-    {
-        /** @var list<array{mixed, list<int|string>}> $chunk0 */
-        $chunk0 = [['a', [1]], ['b', [2]]];
-        /** @var list<array{mixed, list<int|string>}> $chunk1 */
-        $chunk1 = [['c', [3]], ['d', [4]]];
-        $this->store->putIndex('users', $this->version, 'status', $chunk0, 3600, 0);
-        $this->store->putIndex('users', $this->version, 'status', $chunk1, 3600, 1);
-
-        $this->assertSame(
-            $chunk0,
-            $this->store->getIndex('users', $this->version, 'status', 0),
-            'Chunk 0 should be stored independently from chunk 1',
-        );
-        $this->assertSame(
-            $chunk1,
-            $this->store->getIndex('users', $this->version, 'status', 1),
-            'Chunk 1 should be stored independently from chunk 0',
         );
     }
 
@@ -230,7 +185,6 @@ class ArrayStoreTest extends TestCase
     {
         $this->store->putIds('users', $this->version, [1, 2], 3600);
         $this->store->putRecord('users', $this->version, 1, ['id' => 1], 3600);
-        $this->store->putMeta('users', $this->version, ['columns' => []], 3600);
         /** @var list<array{mixed, list<int|string>}> $entries */
         $entries = [['active', [1]]];
         $this->store->putIndex('users', $this->version, 'status', $entries, 3600);
@@ -244,10 +198,6 @@ class ArrayStoreTest extends TestCase
         $this->assertFalse(
             $this->store->getRecord('users', $this->version, 1),
             'Records should be removed after flush',
-        );
-        $this->assertFalse(
-            $this->store->getMeta('users', $this->version),
-            'Meta should be removed after flush',
         );
         $this->assertFalse(
             $this->store->getIndex('users', $this->version, 'status'),

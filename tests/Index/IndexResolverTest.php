@@ -2,6 +2,7 @@
 
 namespace Kura\Tests\Index;
 
+use Kura\Exceptions\IndexInconsistencyException;
 use Kura\Index\IndexResolver;
 use Kura\Store\ArrayStore;
 use PHPUnit\Framework\TestCase;
@@ -18,21 +19,22 @@ class IndexResolverTest extends TestCase
 {
     private ArrayStore $store;
 
-    private IndexResolver $resolver;
+    /** @var array<string, true> */
+    private array $defaultIndexedColumns;
 
     protected function setUp(): void
     {
         $this->store = new ArrayStore;
-        $this->resolver = new IndexResolver($this->store, 'products', 'v1');
+        $this->defaultIndexedColumns = ['country' => true, 'price' => true];
 
-        // Store index entries for 'country' (no chunk)
+        // Store index entries for 'country'
         $this->store->putIndex('products', 'v1', 'country', [
             ['DE', [4]],
             ['JP', [1, 3, 6]],
             ['US', [2, 5, 8]],
         ], 3600);
 
-        // Store index entries for 'price' (no chunk)
+        // Store index entries for 'price'
         $this->store->putIndex('products', 'v1', 'price', [
             [100, [3, 7]],
             [200, [1, 12]],
@@ -42,22 +44,22 @@ class IndexResolverTest extends TestCase
         ], 3600);
     }
 
-    // =========================================================================
-    // Basic meta structure (no chunks)
-    // =========================================================================
-
     /**
-     * @return array<string, mixed>
+     * Build a resolver with the default indexed columns (country, price) and no composites.
      */
-    private function metaNoChunk(): array
+    /**
+     * @param  array<string, true>|null  $indexedColumns
+     * @param  list<string>  $compositeNames
+     */
+    private function resolver(?array $indexedColumns = null, array $compositeNames = []): IndexResolver
     {
-        return [
-            'columns' => ['id' => 'int', 'country' => 'string', 'price' => 'int'],
-            'indexes' => [
-                'country' => [],
-                'price' => [],
-            ],
-        ];
+        return new IndexResolver(
+            $this->store,
+            'products',
+            'v1',
+            $indexedColumns ?? $this->defaultIndexedColumns,
+            $compositeNames,
+        );
     }
 
     // =========================================================================
@@ -67,11 +69,8 @@ class IndexResolverTest extends TestCase
     public function test_resolve_equal(): void
     {
         // Given index for country with JP => [1, 3, 6]
-        $meta = $this->metaNoChunk();
-
-        // When resolving where('country', '=', 'JP')
         $where = ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'JP', 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         // Then IDs [1, 3, 6] should be returned
         $this->assertNotNull($result, 'Index should resolve for equal condition');
@@ -81,10 +80,8 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_equal_no_match(): void
     {
-        $meta = $this->metaNoChunk();
-
         $where = ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'FR', 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNotNull($result, 'Index should resolve even for non-matching value');
         $this->assertSame([], $result, 'Equal with no match should return empty array');
@@ -96,10 +93,8 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_greater_than(): void
     {
-        $meta = $this->metaNoChunk();
-
         $where = ['type' => 'basic', 'column' => 'price', 'operator' => '>', 'value' => 500, 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNotNull($result, 'Index should resolve for > condition');
         sort($result);
@@ -108,10 +103,8 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_greater_than_or_equal(): void
     {
-        $meta = $this->metaNoChunk();
-
         $where = ['type' => 'basic', 'column' => 'price', 'operator' => '>=', 'value' => 500, 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNotNull($result, 'Index should resolve for >= condition');
         sort($result);
@@ -124,10 +117,8 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_less_than(): void
     {
-        $meta = $this->metaNoChunk();
-
         $where = ['type' => 'basic', 'column' => 'price', 'operator' => '<', 'value' => 500, 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNotNull($result, 'Index should resolve for < condition');
         sort($result);
@@ -136,10 +127,8 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_less_than_or_equal(): void
     {
-        $meta = $this->metaNoChunk();
-
         $where = ['type' => 'basic', 'column' => 'price', 'operator' => '<=', 'value' => 500, 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNotNull($result, 'Index should resolve for <= condition');
         sort($result);
@@ -152,10 +141,8 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_between(): void
     {
-        $meta = $this->metaNoChunk();
-
         $where = ['type' => 'between', 'column' => 'price', 'values' => [200, 700], 'not' => false, 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNotNull($result, 'Index should resolve for between condition');
         sort($result);
@@ -168,10 +155,8 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_non_indexed_column_returns_null(): void
     {
-        $meta = $this->metaNoChunk();
-
         $where = ['type' => 'basic', 'column' => 'name', 'operator' => '=', 'value' => 'Alice', 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNull($result, 'Non-indexed column should return null to indicate full scan needed');
     }
@@ -182,11 +167,9 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_unsupported_operator_returns_null(): void
     {
-        $meta = $this->metaNoChunk();
-
         // 'like' operator is not index-resolvable
         $where = ['type' => 'basic', 'column' => 'country', 'operator' => 'like', 'value' => 'J%', 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNull($result, 'Unsupported operator should return null to indicate full scan needed');
     }
@@ -197,29 +180,32 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_filter_type_returns_null(): void
     {
-        $meta = $this->metaNoChunk();
-
         $where = ['type' => 'filter', 'callback' => fn ($r) => true, 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNull($result, 'Filter type should return null — not index-resolvable');
     }
 
     // =========================================================================
-    // Index missing from store returns null
+    // Index key missing from store → IndexInconsistencyException
     // =========================================================================
 
-    public function test_resolve_returns_null_when_index_missing_from_store(): void
+    public function test_resolve_throws_when_index_declared_in_loader_but_missing_from_store(): void
     {
-        $meta = [
-            'columns' => ['id' => 'int', 'status' => 'string'],
-            'indexes' => ['status' => []], // declared in meta but not stored
-        ];
+        // Given: resolver declares 'status' as indexed, but the APCu key does not exist
+        $resolver = new IndexResolver(
+            $this->store,
+            'products',
+            'v1',
+            ['status' => true],
+            [],
+        );
 
         $where = ['type' => 'basic', 'column' => 'status', 'operator' => '=', 'value' => 'active', 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $meta);
 
-        $this->assertNull($result, 'Should return null when index key is missing from store');
+        // Then: IndexInconsistencyException is thrown (APCu eviction detected)
+        $this->expectException(IndexInconsistencyException::class);
+        $resolver->resolveForWhere($where);
     }
 
     // =========================================================================
@@ -228,8 +214,6 @@ class IndexResolverTest extends TestCase
 
     public function test_intersect_combines_multiple_results(): void
     {
-        $meta = $this->metaNoChunk();
-
         $wheres = [
             ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'JP', 'boolean' => 'and'],
             ['type' => 'basic', 'column' => 'price', 'operator' => '>=', 'value' => 200, 'boolean' => 'and'],
@@ -237,7 +221,7 @@ class IndexResolverTest extends TestCase
 
         // country=JP → [1, 3, 6], price>=200 → [1, 6, 8, 9, 12, 14, 15, 4, 11]
         // intersection → [1, 6]
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        $result = $this->resolver()->resolveIds($wheres);
 
         $this->assertNotNull($result, 'Should resolve IDs when all conditions are indexed');
         sort($result);
@@ -246,8 +230,6 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_ids_uses_partial_index_when_some_and_conditions_not_indexed(): void
     {
-        $meta = $this->metaNoChunk();
-
         $wheres = [
             ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'JP', 'boolean' => 'and'],
             ['type' => 'basic', 'column' => 'name', 'operator' => '=', 'value' => 'Alice', 'boolean' => 'and'],
@@ -255,7 +237,7 @@ class IndexResolverTest extends TestCase
 
         // name is not indexed → skipped (WhereEvaluator handles it)
         // country is indexed → narrows to JP candidates
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        $result = $this->resolver()->resolveIds($wheres);
 
         $this->assertNotNull($result, 'Should use country index even though name has no index');
         sort($result);
@@ -264,99 +246,28 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_ids_returns_null_when_no_and_condition_is_indexed(): void
     {
-        $meta = $this->metaNoChunk();
-
         $wheres = [
             ['type' => 'basic', 'column' => 'name', 'operator' => '=', 'value' => 'Alice', 'boolean' => 'and'],
             ['type' => 'basic', 'column' => 'email', 'operator' => '=', 'value' => 'a@example.com', 'boolean' => 'and'],
         ];
 
         // name and email are both non-indexed → no candidates to narrow → full scan
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        $result = $this->resolver()->resolveIds($wheres);
 
         $this->assertNull($result, 'Should return null when no AND condition can use an index');
     }
 
     public function test_resolve_ids_returns_null_when_or_condition_is_not_indexed(): void
     {
-        $meta = $this->metaNoChunk();
-
         $wheres = [
             ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'JP', 'boolean' => 'and'],
             ['type' => 'basic', 'column' => 'name', 'operator' => '=', 'value' => 'Alice', 'boolean' => 'or'],
         ];
 
         // name is OR and not indexed → records matching only name=Alice would be missed
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        $result = $this->resolver()->resolveIds($wheres);
 
         $this->assertNull($result, 'Should return null when an OR branch cannot be index-resolved');
-    }
-
-    // =========================================================================
-    // Chunked index
-    // =========================================================================
-
-    public function test_resolve_equal_from_chunked_index(): void
-    {
-        // Set up chunked index for 'price'
-        $this->store->putIndex('products', 'v1', 'price', [
-            [100, [3, 7]],
-            [200, [1, 12]],
-        ], 3600, chunk: 0);
-
-        $this->store->putIndex('products', 'v1', 'price', [
-            [500, [6, 9, 15]],
-            [700, [8, 14]],
-            [1000, [4, 11]],
-        ], 3600, chunk: 1);
-
-        $metaChunked = [
-            'columns' => ['id' => 'int', 'price' => 'int'],
-            'indexes' => [
-                'price' => [
-                    ['min' => 100, 'max' => 200],
-                    ['min' => 500, 'max' => 1000],
-                ],
-            ],
-        ];
-
-        $where = ['type' => 'basic', 'column' => 'price', 'operator' => '=', 'value' => 700, 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $metaChunked);
-
-        $this->assertNotNull($result, 'Chunked index should resolve for equal condition');
-        $this->assertSame([8, 14], $result, 'Should find IDs from the correct chunk');
-    }
-
-    public function test_resolve_between_spanning_multiple_chunks(): void
-    {
-        $this->store->putIndex('products', 'v1', 'price', [
-            [100, [3, 7]],
-            [200, [1, 12]],
-        ], 3600, chunk: 0);
-
-        $this->store->putIndex('products', 'v1', 'price', [
-            [500, [6, 9, 15]],
-            [700, [8, 14]],
-            [1000, [4, 11]],
-        ], 3600, chunk: 1);
-
-        $metaChunked = [
-            'columns' => ['id' => 'int', 'price' => 'int'],
-            'indexes' => [
-                'price' => [
-                    ['min' => 100, 'max' => 200],
-                    ['min' => 500, 'max' => 1000],
-                ],
-            ],
-        ];
-
-        // BETWEEN 200 AND 700 spans both chunks
-        $where = ['type' => 'between', 'column' => 'price', 'values' => [200, 700], 'not' => false, 'boolean' => 'and'];
-        $result = $this->resolver->resolveForWhere($where, $metaChunked);
-
-        $this->assertNotNull($result, 'Chunked index should resolve between spanning multiple chunks');
-        sort($result);
-        $this->assertSame([1, 6, 8, 9, 12, 14, 15], $result, 'Between spanning chunks should collect IDs from all relevant chunks');
     }
 
     // =========================================================================
@@ -365,8 +276,6 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_in_condition(): void
     {
-        $meta = $this->metaNoChunk();
-
         $where = [
             'type' => 'in',
             'column' => 'country',
@@ -375,7 +284,7 @@ class IndexResolverTest extends TestCase
             'boolean' => 'and',
         ];
 
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNotNull($result, 'Index should resolve for IN condition');
         sort($result);
@@ -388,17 +297,13 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_or_union(): void
     {
-        // Given index for country and price
-        $meta = $this->metaNoChunk();
-
-        // When resolving where('country', 'DE')->orWhere('country', 'JP')
         $wheres = [
             ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'DE', 'boolean' => 'and'],
             ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'JP', 'boolean' => 'or'],
         ];
 
-        // Then DE => [4], JP => [1, 3, 6], union => [1, 3, 4, 6]
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        // DE => [4], JP => [1, 3, 6], union => [1, 3, 4, 6]
+        $result = $this->resolver()->resolveIds($wheres);
 
         $this->assertNotNull($result, 'OR conditions should resolve via union when all are indexed');
         sort($result);
@@ -407,9 +312,6 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_and_then_or(): void
     {
-        // Given index for country and price
-        $meta = $this->metaNoChunk();
-
         // country=JP AND price>=500 OR country=DE
         // (JP ∩ >=500) ∪ DE = {6} ∪ {4} = {4, 6}
         $wheres = [
@@ -418,7 +320,7 @@ class IndexResolverTest extends TestCase
             ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'DE', 'boolean' => 'or'],
         ];
 
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        $result = $this->resolver()->resolveIds($wheres);
 
         $this->assertNotNull($result, 'Mixed AND/OR should resolve when all conditions are indexed');
         sort($result);
@@ -427,14 +329,12 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_or_falls_back_when_not_indexed(): void
     {
-        $meta = $this->metaNoChunk();
-
         $wheres = [
             ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'JP', 'boolean' => 'and'],
             ['type' => 'basic', 'column' => 'name', 'operator' => '=', 'value' => 'Alice', 'boolean' => 'or'],
         ];
 
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        $result = $this->resolver()->resolveIds($wheres);
 
         $this->assertNull($result, 'Should return null when any OR condition is not index-resolvable');
     }
@@ -451,12 +351,15 @@ class IndexResolverTest extends TestCase
             'JP|B' => [3],
             'US|B' => [2],
         ], 3600);
+        $this->store->putIndex('products', 'v1', 'category', [
+            ['A', [1, 4]],
+            ['B', [2, 3]],
+        ], 3600);
 
-        $meta = [
-            'columns' => ['id' => 'int', 'country' => 'string', 'category' => 'string'],
-            'indexes' => ['country' => [], 'category' => []],
-            'composites' => ['country|category'],
-        ];
+        $resolver = $this->resolver(
+            ['country' => true, 'category' => true],
+            ['country|category'],
+        );
 
         // When resolving where('country', 'JP')->where('category', 'A')
         $wheres = [
@@ -464,7 +367,7 @@ class IndexResolverTest extends TestCase
             ['type' => 'basic', 'column' => 'category', 'operator' => '=', 'value' => 'A', 'boolean' => 'and'],
         ];
 
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        $result = $resolver->resolveIds($wheres);
 
         // Then IDs [1, 4] should be returned via composite lookup
         $this->assertNotNull($result, 'Composite index should resolve AND equality conditions');
@@ -474,24 +377,21 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_composite_index_returns_empty_for_no_match(): void
     {
-        // Given a composite index
         $this->store->putCompositeIndex('products', 'v1', 'country|category', [
             'JP|A' => [1],
         ], 3600);
 
-        $meta = [
-            'columns' => ['id' => 'int', 'country' => 'string', 'category' => 'string'],
-            'indexes' => ['country' => [], 'category' => []],
-            'composites' => ['country|category'],
-        ];
+        $resolver = $this->resolver(
+            ['country' => true, 'category' => true],
+            ['country|category'],
+        );
 
-        // When resolving a combination that doesn't exist
         $wheres = [
             ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'FR', 'boolean' => 'and'],
             ['type' => 'basic', 'column' => 'category', 'operator' => '=', 'value' => 'Z', 'boolean' => 'and'],
         ];
 
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        $result = $resolver->resolveIds($wheres);
 
         $this->assertNotNull($result, 'Composite index should resolve even for non-matching key');
         $this->assertSame([], $result, 'Non-matching composite key should return empty array');
@@ -499,31 +399,33 @@ class IndexResolverTest extends TestCase
 
     public function test_resolve_composite_skipped_for_non_equality(): void
     {
-        // Given a composite index
+        // Given a composite index and individual indexes stored properly
         $this->store->putCompositeIndex('products', 'v1', 'country|category', [
             'JP|A' => [1],
         ], 3600);
+        $this->store->putIndex('products', 'v1', 'category', [
+            ['A', [1, 2]],
+            ['B', [3, 4]],
+        ], 3600);
 
-        $meta = [
-            'columns' => ['id' => 'int', 'country' => 'string', 'category' => 'string'],
-            'indexes' => ['country' => [], 'category' => []],
-            'composites' => ['country|category'],
-        ];
+        $resolver = $this->resolver(
+            ['country' => true, 'category' => true],
+            ['country|category'],
+        );
 
-        // When one condition uses '>' instead of '='
+        // When one condition uses '>' instead of '=' — composite index is bypassed
         $wheres = [
             ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'JP', 'boolean' => 'and'],
             ['type' => 'basic', 'column' => 'category', 'operator' => '>', 'value' => 'A', 'boolean' => 'and'],
         ];
 
-        // Then falls back to per-column index resolution (not composite)
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        // Then falls back to per-column index resolution:
+        // country=JP → [1,3,6], category>A → [3,4], AND intersection → [3]
+        $result = $resolver->resolveIds($wheres);
 
-        // category>A is not resolvable (index not in store) → skipped
-        // country=JP IS resolvable → partial resolution returns JP candidates
-        $this->assertNotNull($result, 'Should use country index even though category index is missing from store');
+        $this->assertNotNull($result, 'Should use per-column indexes when composite is skipped');
         sort($result);
-        $this->assertSame([1, 3, 6], $result, 'Should return candidates narrowed by the indexed condition');
+        $this->assertSame([3], $result, 'Should return candidates from AND intersection of country and category indexes');
     }
 
     public function test_resolve_composite_skipped_for_or_boolean(): void
@@ -531,24 +433,28 @@ class IndexResolverTest extends TestCase
         $this->store->putCompositeIndex('products', 'v1', 'country|category', [
             'JP|A' => [1],
         ], 3600);
+        $this->store->putIndex('products', 'v1', 'category', [
+            ['A', [1, 2]],
+            ['B', [3, 4]],
+        ], 3600);
 
-        $meta = [
-            'columns' => ['id' => 'int', 'country' => 'string', 'category' => 'string'],
-            'indexes' => ['country' => [], 'category' => []],
-            'composites' => ['country|category'],
-        ];
+        $resolver = $this->resolver(
+            ['country' => true, 'category' => true],
+            ['country|category'],
+        );
 
-        // OR conditions should not use composite index
+        // OR conditions should not use composite index — falls back to per-column
         $wheres = [
             ['type' => 'basic', 'column' => 'country', 'operator' => '=', 'value' => 'JP', 'boolean' => 'and'],
             ['type' => 'basic', 'column' => 'category', 'operator' => '=', 'value' => 'A', 'boolean' => 'or'],
         ];
 
-        // Falls back to per-column, which uses store → null for missing store data
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        // country=JP (AND) → {1,3,6}, category=A (OR) → {1,2} → union {1,2,3,6}
+        $result = $resolver->resolveIds($wheres);
 
-        // Country index exists in store from setUp, category does not
-        $this->assertNull($result, 'OR conditions should not use composite index');
+        $this->assertNotNull($result, 'Per-column OR resolution should return a union of IDs');
+        sort($result);
+        $this->assertSame([1, 2, 3, 6], $result, 'OR should union country=JP and category=A candidates');
     }
 
     public function test_resolve_composite_skipped_when_columns_dont_match(): void
@@ -557,11 +463,10 @@ class IndexResolverTest extends TestCase
             'JP|A' => [1],
         ], 3600);
 
-        $meta = [
-            'columns' => ['id' => 'int', 'country' => 'string', 'price' => 'int'],
-            'indexes' => ['country' => [], 'price' => []],
-            'composites' => ['country|category'],
-        ];
+        $resolver = $this->resolver(
+            ['country' => true, 'price' => true],
+            ['country|category'],
+        );
 
         // Conditions on country + price, but composite is country|category
         $wheres = [
@@ -569,16 +474,97 @@ class IndexResolverTest extends TestCase
             ['type' => 'basic', 'column' => 'price', 'operator' => '=', 'value' => 100, 'boolean' => 'and'],
         ];
 
-        $result = $this->resolver->resolveIds($wheres, $meta);
+        $result = $resolver->resolveIds($wheres);
 
         // Falls back to per-column intersection
         $this->assertNotNull($result, 'Should fall back to per-column when composite columns do not match');
     }
 
+    // =========================================================================
+    // Composite index — whereIn acceleration
+    // =========================================================================
+
+    public function test_composite_index_used_for_where_in_plus_equality(): void
+    {
+        // Given composite index country|category
+        $this->store->putCompositeIndex('products', 'v1', 'country|category', [
+            'JP|A' => [1, 4],
+            'US|A' => [2],
+            'JP|B' => [3],
+            'DE|A' => [5],
+        ], 3600);
+
+        $resolver = $this->resolver(
+            ['country' => true],
+            ['country|category'],
+        );
+
+        // whereIn('country', ['JP','US']) + where('category', 'A')
+        $wheres = [
+            ['type' => 'in', 'column' => 'country', 'values' => ['JP', 'US'], 'not' => false, 'boolean' => 'and'],
+            ['type' => 'basic', 'column' => 'category', 'operator' => '=', 'value' => 'A', 'boolean' => 'and'],
+        ];
+
+        $result = $resolver->resolveIds($wheres);
+
+        $this->assertNotNull($result, 'Composite index should resolve whereIn + equality');
+        sort($result);
+        $this->assertSame([1, 2, 4], $result, 'Should return JP|A + US|A union');
+    }
+
+    public function test_composite_index_used_for_two_where_in_conditions(): void
+    {
+        // Given composite index country|category
+        $this->store->putCompositeIndex('products', 'v1', 'country|category', [
+            'JP|A' => [1],
+            'JP|B' => [2],
+            'US|A' => [3],
+            'US|B' => [4],
+            'DE|A' => [5],
+        ], 3600);
+
+        $resolver = $this->resolver(
+            ['country' => true],
+            ['country|category'],
+        );
+
+        // Both columns use IN — cartesian product: JP|A, JP|B, US|A, US|B
+        $wheres = [
+            ['type' => 'in', 'column' => 'country', 'values' => ['JP', 'US'], 'not' => false, 'boolean' => 'and'],
+            ['type' => 'in', 'column' => 'category', 'values' => ['A', 'B'], 'not' => false, 'boolean' => 'and'],
+        ];
+
+        $result = $resolver->resolveIds($wheres);
+
+        $this->assertNotNull($result, 'Composite index should resolve two whereIn conditions');
+        sort($result);
+        $this->assertSame([1, 2, 3, 4], $result, 'Cartesian product should cover JP|A + JP|B + US|A + US|B');
+    }
+
+    public function test_composite_not_used_for_not_in(): void
+    {
+        $this->store->putCompositeIndex('products', 'v1', 'country|category', [
+            'JP|A' => [1],
+        ], 3600);
+
+        $resolver = $this->resolver(
+            ['country' => true],
+            ['country|category'],
+        );
+
+        // NOT IN → composite cannot be used
+        $wheres = [
+            ['type' => 'in', 'column' => 'country', 'values' => ['JP'], 'not' => true, 'boolean' => 'and'],
+            ['type' => 'basic', 'column' => 'category', 'operator' => '=', 'value' => 'A', 'boolean' => 'and'],
+        ];
+
+        $result = $resolver->resolveIds($wheres);
+
+        $this->assertNull($result, 'NOT IN should not use composite index — falls back to full scan');
+    }
+
     public function test_resolve_not_in_returns_null(): void
     {
-        $meta = $this->metaNoChunk();
-
         $where = [
             'type' => 'in',
             'column' => 'country',
@@ -587,7 +573,7 @@ class IndexResolverTest extends TestCase
             'boolean' => 'and',
         ];
 
-        $result = $this->resolver->resolveForWhere($where, $meta);
+        $result = $this->resolver()->resolveForWhere($where);
 
         $this->assertNull($result, 'NOT IN should return null — not efficiently index-resolvable');
     }

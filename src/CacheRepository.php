@@ -9,15 +9,12 @@ use Kura\Store\StoreInterface;
 /**
  * Thin data layer over StoreInterface for a single table.
  *
- * Provides ids(), find(), meta(), isLocked(), rebuild().
+ * Provides ids(), find(), isLocked(), rebuild().
  * No auto-reload on cache miss — the caller (CacheProcessor or query layer)
  * decides when to trigger a rebuild.
  */
 class CacheRepository
 {
-    /** @var array<string, mixed>|false|null null = not yet fetched */
-    private array|false|null $metaCache = null;
-
     private readonly string $version;
 
     public function __construct(
@@ -81,22 +78,6 @@ class CacheRepository
         return $record !== false ? $record : null;
     }
 
-    /**
-     * Return meta from the store, or false if not cached.
-     *
-     * Uses PHP var cache to avoid repeated APCu fetches within a single request.
-     *
-     * @return array<string, mixed>|false
-     */
-    public function meta(): array|false
-    {
-        if ($this->metaCache === null) {
-            $this->metaCache = $this->store->getMeta($this->table, $this->version());
-        }
-
-        return $this->metaCache;
-    }
-
     public function isLocked(): bool
     {
         return $this->store->isLocked($this->table);
@@ -105,12 +86,14 @@ class CacheRepository
     /**
      * Full rebuild: flush and re-import all records from the loader.
      *
-     * Phase 1 (locked): load records into store, build ids hashmap.
-     * Phase 2 (after records): build meta.
+     * Both record/ids writes (Phase 1) and index writes (Phase 2) are performed
+     * inside the lock. This eliminates the Phase-1→Phase-2 window where index
+     * keys are absent while ids is already present, preventing thundering-herd
+     * against the data source during that window.
      *
-     * @param  array{ids?: int, record?: int, meta?: int, index?: int, ids_jitter?: int}  $ttl
+     * @param  array{ids?: int, record?: int, index?: int, ids_jitter?: int}  $ttl
      */
-    public function rebuild(array $ttl = [], ?int $chunkSize = null, int $lockTtl = 60): void
+    public function rebuild(array $ttl = [], int $lockTtl = 60): void
     {
         if (! $this->store->acquireLock($this->table, $lockTtl)) {
             return; // Another process is already rebuilding
@@ -120,13 +103,12 @@ class CacheRepository
         $idsJitter = $ttl['ids_jitter'] ?? 0;
         $idsTtl = ($ttl['ids'] ?? 3600) + ($idsJitter > 0 ? random_int(0, $idsJitter) : 0);
         $recordTtl = $ttl['record'] ?? 4800;
-        $metaTtl = $ttl['meta'] ?? 4800;
-        $indexTtl = $ttl['index'] ?? 4800;
+        $indexTtl = $ttl['index'] ?? $idsTtl; // Default: same as ids (including jitter)
 
         try {
             $this->store->flush($this->table, $version);
 
-            // Phase 1 (locked): load records + build ids + collect index data
+            // Phase 1: load records + build ids + collect index data
             /** @var list<int|string> $idsList */
             $idsList = [];
             /** @var array<string, array<string|int, list<int|string>>> $indexData col → [value → [ids]] */
@@ -173,74 +155,41 @@ class CacheRepository
             }
 
             $this->store->putIds($this->table, $version, $idsList, $idsTtl);
+
+            // Phase 2: build and write indexes (inside lock — eliminates Phase-1→2 window)
+            $indexBuilder = new IndexBuilder($this->primaryKey);
+
+            foreach ($indexData as $column => $valueMap) {
+                ksort($valueMap, SORT_NATURAL);
+                /** @var list<array{mixed, list<int|string>}> $entries */
+                $entries = [];
+                foreach ($valueMap as $value => $ids) {
+                    $entries[] = [$indexBuilder->restoreType($value), $ids];
+                }
+                $this->store->putIndex($this->table, $version, $column, $entries, $indexTtl);
+            }
+
+            // Write empty index for indexed columns with no data
+            foreach ($indexedColumns as $col) {
+                if (! isset($indexData[$col])) {
+                    $this->store->putIndex($this->table, $version, $col, [], $indexTtl);
+                }
+            }
+
+            // Write composite indexes
+            foreach ($compositeData as $name => $map) {
+                $this->store->putCompositeIndex($this->table, $version, $name, $map, $indexTtl);
+            }
+
+            // Write empty composite index for definitions with no data
+            foreach ($compositeDefs as $name => $cols) {
+                if (! isset($compositeData[$name])) {
+                    $this->store->putCompositeIndex($this->table, $version, $name, [], $indexTtl);
+                }
+            }
         } finally {
             $this->store->releaseLock($this->table);
         }
-
-        // Phase 2 (unlocked): build indexes + meta
-        // Queries can now run in full-scan mode (ids exist, meta not yet)
-        $columns = $this->loader->columns();
-        $indexBuilder = new IndexBuilder($this->primaryKey);
-
-        /** @var array<string, list<array{min: mixed, max: mixed}>|array{}> $indexMeta */
-        $indexMeta = [];
-
-        foreach ($indexData as $column => $valueMap) {
-            // Sort by value and build entries
-            ksort($valueMap, SORT_NATURAL);
-            /** @var list<array{mixed, list<int|string>}> $entries */
-            $entries = [];
-            foreach ($valueMap as $value => $ids) {
-                $entries[] = [$indexBuilder->restoreType($value), $ids];
-            }
-
-            if ($chunkSize !== null && $chunkSize > 0) {
-                /** @var int<1, max> $chunkSize */
-                $chunkedEntries = array_chunk($entries, $chunkSize);
-                $chunkMeta = [];
-                foreach ($chunkedEntries as $chunkIndex => $chunkEntries) {
-                    $this->store->putIndex($this->table, $version, $column, $chunkEntries, $indexTtl, $chunkIndex);
-                    $chunkMeta[] = [
-                        'min' => $chunkEntries[0][0],
-                        'max' => $chunkEntries[count($chunkEntries) - 1][0],
-                    ];
-                }
-                $indexMeta[$column] = $chunkMeta;
-            } else {
-                $this->store->putIndex($this->table, $version, $column, $entries, $indexTtl);
-                $indexMeta[$column] = [];
-            }
-        }
-
-        // Columns with index definitions but no data
-        foreach ($indexedColumns as $col) {
-            if (! isset($indexMeta[$col])) {
-                $indexMeta[$col] = [];
-            }
-        }
-
-        // Store composite indexes
-        /** @var list<string> $compositeNames */
-        $compositeNames = [];
-        foreach ($compositeData as $name => $map) {
-            $this->store->putCompositeIndex($this->table, $version, $name, $map, $indexTtl);
-            $compositeNames[] = $name;
-        }
-
-        // Include composite names for definitions with no data
-        foreach ($compositeDefs as $name => $cols) {
-            if (! in_array($name, $compositeNames, true)) {
-                $compositeNames[] = $name;
-            }
-        }
-
-        $meta = [
-            'columns' => $columns,
-            'indexes' => $indexMeta,
-            'composites' => $compositeNames,
-        ];
-        $this->store->putMeta($this->table, $version, $meta, $metaTtl);
-        $this->metaCache = null; // Invalidate PHP var cache
     }
 
     /**

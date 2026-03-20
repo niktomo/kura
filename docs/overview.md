@@ -48,14 +48,14 @@ src/
 │       └── KuraAuthMiddleware.php     Bearer token auth for warm routes
 ├── Index/
 │   ├── IndexDefinition.php            Index definition DTO (unique / non-unique)
-│   ├── IndexBuilder.php               Index construction (sorting, chunk splitting, composite)
+│   ├── IndexBuilder.php               Index construction (sorting, composite)
 │   ├── IndexResolver.php              Candidate ID resolution from indexes
 │   └── BinarySearch.php               Binary search on sorted indexes
 ├── Jobs/
 │   └── RebuildCacheJob.php            Async cache rebuild job
 ├── Loader/
 │   ├── LoaderInterface.php            Abstract interface for data retrieval
-│   ├── CsvLoader.php                  CSV-based loader (data.csv with version column)
+│   ├── CsvLoader.php                  CSV-based loader (data.csv + defines.csv + indexes.csv)
 │   ├── CsvVersionResolver.php         Resolves active version from versions.csv
 │   ├── EloquentLoader.php             Eloquent model-based loader
 │   └── QueryBuilderLoader.php         Query builder-based loader
@@ -76,26 +76,28 @@ src/
 ## APCu Key Structure
 
 ```
-{prefix}:{table}:{version}:meta                    Meta information (columns + indexes + composites)
 {prefix}:{table}:{version}:ids                     Full ID list [id, ...]
 {prefix}:{table}:{version}:record:{id}             Single record (associative array)
-{prefix}:{table}:{version}:idx:{col}               Index (no chunking)
-{prefix}:{table}:{version}:idx:{col}:{chunk}       Index (chunked)
+{prefix}:{table}:{version}:idx:{col}               Index (one key per column)
 {prefix}:{table}:{version}:cidx:{col1|col2}        Composite index (hashmap)
 {prefix}:{table}:lock                               Rebuild lock (version-independent)
 ```
+
+Index structure (which columns are indexed, which composites exist) is **not stored in APCu**.
+It is derived at query time from `LoaderInterface::indexes()`, which is instance-cached in the Loader.
 
 ### TTL Strategy
 
 | Key | TTL | Purpose |
 |------|-----|------|
 | `ids` | Short (e.g., 3600s) | Expiration triggers full rebuild |
-| `meta` | Long (e.g., 4800s) | Expiration → full scan + rebuild |
 | `record:*` | Long (e.g., 4800s) | Expiration + present in ids → full rebuild |
-| `index` | Long (e.g., 4800s) | Expiration → full scan + rebuild |
-| `cidx` | Long (e.g., 4800s) | Expiration → full scan + rebuild |
+| `index` | Same as `ids` (default) | Expiration → `IndexInconsistencyException` → rebuild |
+| `cidx` | Same as `ids` (default) | Expiration → `IndexInconsistencyException` → rebuild |
 
-TTL is configured in `config/kura.php`. `ids` has the shortest TTL (serving as the rebuild trigger).
+TTL is configured in `config/kura.php`. `ids` has the shortest TTL (serving as the rebuild trigger). `index` defaults to the same TTL as `ids` (including jitter) so they expire together.
+
+If an index is declared in `LoaderInterface::indexes()` but the APCu key is missing (`IndexInconsistencyException`), Kura triggers a rebuild and falls back to the Loader — the same recovery path as `CacheInconsistencyException`.
 
 ### Version Management
 
@@ -141,17 +143,15 @@ RebuildCacheJob (async)
   └─ Loader::load()                     ← Streams records via Generator
        └─ apcu_store({version}:record:{id})  ← Writes one record at a time
        └─ apcu_store({version}:ids)          ← Bulk write after loop
-       └─ apcu_store({version}:idx:*)        ← Built in Phase 2
-       └─ apcu_store({version}:cidx:*)       ← Built in Phase 2
-       └─ apcu_store({version}:meta)         ← Built in Phase 2
+       └─ apcu_store({version}:idx:*)        ← Written inside the lock (after loop)
+       └─ apcu_store({version}:cidx:*)       ← Written inside the lock (after loop)
 ```
 
 ### Self-Healing During Query Execution
 
 ```
 ReferenceQueryBuilder::get()
-  ├─ ids present + meta present → Normal query (uses indexes)
-  ├─ ids present + meta missing → Responds via full scan + dispatches rebuild
+  ├─ ids present → Normal query (index structure from Loader::indexes())
   ├─ ids missing → Falls back to Loader directly + dispatches rebuild
   └─ record missing + present in ids → CacheInconsistencyException → rebuild
 ```
@@ -180,7 +180,7 @@ CacheProcessor
        └─ cursor() / select() — Record retrieval & self-healing
 
 CacheRepository
-  ├─ Role: Per-table cache management. Retrieves ids / record / meta & triggers rebuild
+  ├─ Role: Per-table cache management. Retrieves ids / record & triggers rebuild
   ├─ Dependencies: StoreInterface, LoaderInterface
   └─ Responsibilities:
        ├─ ids() — Returns false if ids key is missing
@@ -207,8 +207,7 @@ WhereEvaluator (Support)
 
 ```
 StoreInterface
-  └─ getMeta / putMeta
-     getIds / putIds
+  └─ getIds / putIds
      getRecord / putRecord
      getIndex / putIndex
      getCompositeIndex / putCompositeIndex
@@ -227,6 +226,24 @@ LoaderInterface
      version(): string|int|Stringable                Version identifier
 
 CsvLoader / EloquentLoader / QueryBuilderLoader are included in src/Loader/
+
+CsvLoader file layout:
+  {tableDirectory}/
+    data.csv      — rows with a version column (required)
+    defines.csv   — column name → type mapping
+    indexes.csv   — index definitions (optional; falls back to constructor arg)
+
+indexes.csv format:
+  columns,unique
+  prefecture,false       — single-column index
+  email,true             — unique index
+  country|type,false     — composite index (| separator)
+
+Auto-discovery (config: kura.csv.auto_discover = true):
+  KuraServiceProvider scans kura.csv.base_path for subdirectories.
+  Any subdirectory containing data.csv is registered as a CsvLoader table.
+  versions.csv is shared at base_path/versions.csv.
+  primary_key overrides: config('kura.tables.{table}.primary_key')
 ```
 
 ### Index Layer
@@ -239,7 +256,6 @@ IndexDefinition
 IndexBuilder
   └─ Builds indexes during rebuild
      buildSorted(): [[value, [ids]], ...] sorted list
-     buildChunked(): chunk splitting
      buildCompositeIndexes(): composite index hashmap
      When a composite is declared, single-column indexes for each column are also created automatically
 
@@ -339,6 +355,8 @@ id,name,price,version
 2,Widget B,19.99,v1.0.0
 3,Widget C,29.99,v1.1.0
 ```
+
+**Empty cells are treated as `null`.** An empty cell in `data.csv` (e.g. the `version` column of row 1 above) is stored as `null` in the record. This follows standard CSV convention and is consistent with MySQL `NULL` semantics used throughout Kura.
 
 ### defines.csv
 

@@ -5,6 +5,11 @@
 
 # Kura
 
+[![Tests](https://github.com/tomonori/kura/actions/workflows/tests.yml/badge.svg)](https://github.com/tomonori/kura/actions/workflows/tests.yml)
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/tomonori/kura.svg)](https://packagist.org/packages/tomonori/kura)
+[![PHP Version](https://img.shields.io/badge/php-%5E8.2-blue)](https://www.php.net/)
+[![License](https://img.shields.io/github/license/tomonori/kura)](LICENSE)
+
 **Kura** (蔵 — *storehouse*) is a Laravel package that caches reference data in APCu and queries it with a **Laravel QueryBuilder-compatible API**.
 
 Load data once from CSV or DB, store it in APCu, and query it with the same fluent API you already know — **no database queries at runtime**. Index-accelerated lookups keep response times sub-millisecond even with large datasets.
@@ -72,6 +77,7 @@ data/
 ├── versions.csv           # shared version registry
 └── stations/
     ├── defines.csv        # column definitions
+    ├── indexes.csv        # index definitions (optional)
     └── data.csv           # data (version column required)
 ```
 
@@ -98,6 +104,20 @@ version,string,Data version (required)
 ```
 
 Supported types: `int`, `float`, `bool`, `string`
+
+**stations/indexes.csv** — optional; defines which columns to index for fast lookups:
+```csv
+columns,unique
+prefecture,false
+line_id,false
+prefecture|city,false
+```
+
+- `columns`: column name, or `|`-separated list for a composite index
+- `unique`: `true` / `false`
+- Composite indexes (`col1|col2`) enable O(1) multi-column equality lookups
+
+> **Tip:** If `indexes.csv` is absent, you can pass `indexDefinitions` to `CsvLoader` directly (see [Register tables](#3-register-tables)).
 
 **stations/data.csv** — the actual data, with a `version` column:
 ```csv
@@ -152,6 +172,44 @@ class MyApiLoader implements LoaderInterface
 See [Implementing a Custom Loader](docs/overview.md#implementing-a-custom-loader) for a full example.
 
 ### 3. Register tables
+
+#### Option A: Auto-discovery (CSV only)
+
+The easiest approach when using CSV files — Kura scans a directory and registers every subdirectory that contains `data.csv` automatically. No `AppServiceProvider` code needed.
+
+```php
+// config/kura.php
+'csv' => [
+    'base_path'     => storage_path('reference'),  // directory to scan
+    'auto_discover' => true,
+],
+```
+
+```
+storage/reference/
+├── versions.csv        # shared version registry
+├── stations/
+│   ├── data.csv
+│   ├── defines.csv
+│   └── indexes.csv
+└── lines/
+    ├── data.csv
+    ├── defines.csv
+    └── indexes.csv
+```
+
+That's it — `stations` and `lines` are registered automatically. To override the primary key for a specific table:
+
+```php
+// config/kura.php
+'tables' => [
+    'products' => ['primary_key' => 'product_code'],
+],
+```
+
+> **Note:** Adding a new table directory requires restarting the PHP process (`php artisan octane:restart` for Octane, or reloading PHP-FPM). The directory scan runs once at boot. Updating data inside an existing table (data.csv) also requires running `php artisan kura:rebuild` — there is no automatic file-change detection. Self-Healing only triggers on APCu TTL expiry, not on data.csv modification.
+
+#### Option B: Manual registration
 
 In your `AppServiceProvider` (or a dedicated service provider):
 
@@ -245,10 +303,8 @@ Data Source (CSV / DB)
 
 ```
 kura:stations:v1.0.0:ids                    # all IDs
-kura:stations:v1.0.0:meta                   # column definitions + index structure
 kura:stations:v1.0.0:record:1               # single record
 kura:stations:v1.0.0:idx:prefecture         # search index (single column)
-kura:stations:v1.0.0:idx:price:0            # chunked index (large datasets)
 kura:stations:v1.0.0:cidx:prefecture|city   # composite index (O(1) multi-column lookup)
 ```
 
@@ -295,6 +351,7 @@ Kura implements ~99 methods from Laravel's QueryBuilder. For the complete list, 
 | [Cache Architecture](docs/cache-architecture.md) / [日本語](docs/cache-architecture-ja.md) | Internal design: TTL, self-healing, rebuild flow |
 | [Overview](docs/overview.md) / [日本語](docs/overview-ja.md) | Class structure and responsibilities |
 | [Laravel Builder Coverage](docs/laravel-builder-coverage.md) / [日本語](docs/laravel-builder-coverage-ja.md) | Full API compatibility table |
+| [Troubleshooting](docs/troubleshooting.md) / [日本語](docs/troubleshooting-ja.md) | APCu issues, slow queries, multi-server setup |
 
 ## Configuration
 
@@ -311,22 +368,23 @@ See [`config/kura.php`](config/kura.php) for all available options. Per-table ov
 
 ## Benchmarks
 
-Measured on Apple M4 Pro / PHP 8.4 / APCu 5.1.28 (`apc.shm_size=256M`).
+Measured on Apple M4 Pro / PHP 8.4.19 / APCu 5.1.28 (`apc.shm_size=256M`).
 Each scenario runs 500 iterations; p95 latency shown.
 
 | Scenario | 1K records | 10K records | 100K records |
 |---|---|---|---|
-| `find($id)` — single record | **0.7 µs** | **0.7 µs** | **0.7 µs** |
-| `where('country','JP')` — indexed `=` | **136 µs** | **1.4 ms** | **16 ms** |
-| `where('country','JP')->where('category','...')` — composite index | **96 µs** | **947 µs** | **11 ms** |
-| `whereBetween('price', [50,100])` — range index | **180 µs** | **1.7 ms** | **17 ms** |
-| `where('active', true)` — non-indexed (full scan) | 478 µs | 4.9 ms | 50 ms |
-| `where(...)->orderBy('price')` — indexed + sorted | 284 µs | 3.6 ms | 47 ms |
-| `get()` — all records | 392 µs | 3.9 ms | 40 ms |
-| Cache build (`rebuild()`) | 8.9 ms | 12.9 ms | 135 ms |
+| `find($id)` — single record | **0.9 µs** | **0.8 µs** | **0.9 µs** |
+| `where('country','JP')` — indexed `=` | **139 µs** | **1.3 ms** | **16 ms** |
+| `where('country','JP')->where('category','...')` — composite index | **105 µs** | **984 µs** | **11 ms** |
+| `whereBetween('price', [50,100])` — range index | **181 µs** | **1.7 ms** | **18 ms** |
+| `where(...)->orderBy('price')->get()` — index walk | **190 µs** | **1.7 ms** | **21 ms** |
+| `where('active', true)` — non-indexed (full scan) | 477 µs | 4.8 ms | 52 ms |
+| `get()` — all records | 379 µs | 3.7 ms | 40 ms |
+| Cache build (`rebuild()`) | 3.9 ms | 11.8 ms | 115 ms |
 
 Index-accelerated queries (**bold**) are 3–5× faster than full scans at all scales.
-At 100K records, indexed queries stay under 20ms; full scans reach ~50ms.
+At 100K records, indexed queries stay under 21 ms; full scans reach ~52 ms.
+`orderBy` on an indexed column uses an index walk (pre-sorted in APCu) — no PHP sort needed.
 
 > Run `php benchmarks/benchmark.php` in the Docker environment to reproduce.
 
