@@ -120,37 +120,43 @@ interface VersionResolverInterface
 
 ### 実装一覧
 
-| リゾルバー | ソース | 用途 |
+| クラス | 役割 | 用途 |
 |---|---|---|
-| `CsvVersionResolver` | `versions.csv` ファイル | CSV のみのデプロイ |
-| `DatabaseVersionResolver` | DB `reference_versions` テーブル | DB ベースのデプロイ |
-| `CachedVersionResolver` | デコレータ — APCu + PHP var でキャッシュ | 本番環境（上記いずれかをラップ） |
+| `CsvVersionResolver` | `versions.csv` から全行を読み込む | CSV のみのデプロイ |
+| `DatabaseVersionResolver` | DB テーブルから全行を読み込む | DB ベースのデプロイ |
+| `CachedVersionResolver` | 全行を APCu にキャッシュ；`resolve()` 時に `now()` でフィルタ | 本番環境（上記いずれかをラップ） |
 
 ### CachedVersionResolver
 
-任意のリゾルバーをラップして DB/CSV への繰り返しアクセスを回避します:
+`CachedVersionResolver` は `VersionsLoaderInterface`（`CsvVersionResolver` または `DatabaseVersionResolver`）をラップします。**全バージョン行** を APCu にキャッシュし、`resolve()` のたびに現在時刻でフィルタします:
+
+```
+APCu ミス → DB/CSV から全行ロード → APCu に cache_ttl 秒保存
+APCu ヒット → activated_at <= now() でフィルタ → 最新の一致バージョンを返却
+```
 
 ```php
 use Illuminate\Database\ConnectionInterface;
 use Kura\Version\CachedVersionResolver;
 use Kura\Version\DatabaseVersionResolver;
 
-// DatabaseVersionResolver は DB ファサードではなく ConnectionInterface を受け取る
 // KuraServiceProvider が $app['db']->connection() で自動バインドする
 $inner = new DatabaseVersionResolver(
     connection: $app['db']->connection(),
     table: 'reference_versions',
 );
-$resolver = new CachedVersionResolver($inner, cacheTtl: 300);
+$resolver = new CachedVersionResolver($inner, ttl: 300);
 
-// 初回: DB から読み取り、APCu + PHP var にキャッシュ
-// 5分以内の後続呼び出し: キャッシュから返却
+// 初回: DB から全行読み取り、APCu に保存
+// 5分以内の後続呼び出し: APCu の行を now() でフィルタ
 $version = $resolver->resolve();
 ```
 
-- **PHP var キャッシュ**: 即時（同一リクエスト内）
-- **APCu キャッシュ**: サブミリ秒（クロスリクエスト、同一 SAPI 内）
-- **DB/CSV**: 両方のキャッシュがミスした場合のみ（`cache_ttl` 秒ごと）
+- **PHP var キャッシュ**: リクエスト中のバージョンを固定（Octane 安全）
+- **APCu キャッシュ**: 全バージョン行をクロスリクエストで保持；`cache_ttl` 秒ごとに更新
+- **DB/CSV**: APCu ミス時のみアクセス
+
+新バージョンの `activated_at` が到来すると、`resolve()` は自動的にそのバージョンを返します — 全行がキャッシュ済みで毎回フィルタするため、キャッシュの無効化は不要です。
 
 `KuraServiceProvider` が config に基づいて適切なリゾルバーを自動的に作成・バインドします。
 
@@ -331,8 +337,8 @@ CI/CD ビルド時
     // CSV ドライバー設定
     'csv_path' => '',  // versions.csv の絶対パス
 
-    // 解決されたバージョンを APCu にキャッシュする秒数
-    // 0 = キャッシュなし（毎回解決）
+    // 全バージョン行を APCu にキャッシュする秒数
+    // 0 = キャッシュなし（毎リクエスト DB/CSV から読み込む）
     'cache_ttl' => 300,
 ],
 ```

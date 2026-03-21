@@ -121,64 +121,70 @@ ID lists from each index are converted to hashmaps via `array_flip`, then inters
 
 Indexes are declared via `LoaderInterface::indexes()` — it's the Loader's responsibility.
 
-### CSV
+### CSV and Database Loaders
 
+All loaders (CsvLoader, EloquentLoader, QueryBuilderLoader) read column and index definitions from CSV files in the table directory:
+
+```
+data/stations/
+├── defines.csv    # column type definitions  (required)
+├── indexes.csv    # index declarations       (optional — omit if no indexes needed)
+└── data.csv       # CSV data                 (CsvLoader only)
+```
+
+**defines.csv format:**
+```csv
+column,type,description
+id,int,Primary key
+prefecture,string,Prefecture name
+line_id,int,Line ID
+code,string,Station code
+price,int,Price
+```
+
+- `column`: column name
+- `type`: `int`, `string`, `float`, or `bool`
+- `description`: free text, ignored by Kura
+
+**indexes.csv format:**
+```csv
+columns,unique
+prefecture,false
+line_id,false
+prefecture|line_id,false
+code,true
+```
+
+- `columns`: single column name, or `col1|col2` for composite
+- `unique`: `true` or `false`
+
+**CsvLoader:**
 ```php
-// Option A: array syntax
 $loader = new CsvLoader(
     tableDirectory: base_path('data/stations'),
     resolver: $resolver,
-    indexDefinitions: [
-        ['columns' => ['prefecture'], 'unique' => false],
-        ['columns' => ['line_id'], 'unique' => false],
-        ['columns' => ['prefecture', 'line_id'], 'unique' => false],  // composite
-        ['columns' => ['code'], 'unique' => true],
-    ],
 );
-
-// Option B: indexes.csv in the table directory (auto-discovered)
-// columns,unique
-// prefecture,false
-// line_id,false
-// prefecture|line_id,false
-// code,true
 ```
 
-### Database (EloquentLoader / QueryBuilderLoader)
-
-Pass `indexes` directly to the constructor — same array syntax as CSV:
-
+**EloquentLoader:**
 ```php
-use Kura\Index\IndexDefinition;
-
 $loader = new EloquentLoader(
     query: Station::query(),
-    columns: ['id' => 'int', 'prefecture' => 'string', 'line_id' => 'int', 'code' => 'string'],
-    indexes: [
-        ['columns' => ['prefecture'], 'unique' => false],
-        ['columns' => ['line_id'], 'unique' => false],
-        ['columns' => ['prefecture', 'line_id'], 'unique' => false],  // composite
-        ['columns' => ['code'], 'unique' => true],
-    ],
-    version: $resolver,
+    tableDirectory: base_path('data/stations'),
+    resolver: $resolver,
 );
+```
 
-// Or using IndexDefinition factory
-$loader = new EloquentLoader(
-    query: Station::query(),
-    columns: ['id' => 'int', 'prefecture' => 'string', 'line_id' => 'int', 'code' => 'string'],
-    indexes: [
-        IndexDefinition::nonUnique('prefecture'),
-        IndexDefinition::nonUnique('line_id'),
-        IndexDefinition::nonUnique('prefecture', 'line_id'),  // composite
-        IndexDefinition::unique('code'),
-    ],
-    version: $resolver,
+**QueryBuilderLoader:**
+```php
+$loader = new QueryBuilderLoader(
+    query: DB::table('stations'),
+    tableDirectory: base_path('data/stations'),
+    resolver: $resolver,
 );
 ```
 
 > **Note**: Kura's indexes are **independent of your database indexes**. A column does not need a DB index to be indexed in Kura's APCu cache. That said, columns that are worth indexing in Kura (high selectivity, frequently queried) are often worth indexing in the DB too — they are two separate optimizations.
-```
 
 ### Unique vs Non-Unique
 
@@ -218,18 +224,19 @@ $loader = new EloquentLoader(
 
 A stations table with 9,000+ records:
 
+**data/stations/indexes.csv:**
+```csv
+columns,unique
+prefecture,false
+line_id,false
+prefecture|line_id,false
+```
+
 ```php
-// Index declaration
 $loader = new CsvLoader(
     tableDirectory: base_path('data/stations'),
     resolver: $resolver,
-    indexDefinitions: [
-        ['columns' => ['prefecture'], 'unique' => false],      // ~47 values
-        ['columns' => ['line_id'], 'unique' => false],          // ~300 values
-        ['columns' => ['prefecture', 'line_id'], 'unique' => false],  // composite
-    ],
 );
-
 ```
 
 This creates:

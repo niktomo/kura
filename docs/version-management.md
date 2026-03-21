@@ -120,37 +120,43 @@ interface VersionResolverInterface
 
 ### Implementations
 
-| Resolver | Source | Use case |
+| Class | Role | Use case |
 |---|---|---|
-| `CsvVersionResolver` | `versions.csv` file | CSV-only deployments |
-| `DatabaseVersionResolver` | DB `reference_versions` table | DB-backed deployments |
-| `CachedVersionResolver` | Decorator — caches result in APCu + PHP var | Production (wraps either of the above) |
+| `CsvVersionResolver` | Loads all rows from `versions.csv` | CSV-only deployments |
+| `DatabaseVersionResolver` | Loads all rows from DB table | DB-backed deployments |
+| `CachedVersionResolver` | Caches all rows in APCu; filters by `now()` at resolve time | Production (wraps either of the above) |
 
 ### CachedVersionResolver
 
-Wraps any resolver to avoid repeated DB/CSV reads:
+`CachedVersionResolver` wraps a `VersionsLoaderInterface` (either `CsvVersionResolver` or `DatabaseVersionResolver`). It caches **all version rows** in APCu, then filters by the current time at every `resolve()` call:
+
+```
+APCu miss → load all rows from DB/CSV → store in APCu for cache_ttl seconds
+APCu hit  → filter rows: activated_at <= now() → return latest matching version
+```
 
 ```php
 use Illuminate\Database\ConnectionInterface;
 use Kura\Version\CachedVersionResolver;
 use Kura\Version\DatabaseVersionResolver;
 
-// DatabaseVersionResolver takes a ConnectionInterface (not DB facade)
 // KuraServiceProvider binds this automatically via $app['db']->connection()
 $inner = new DatabaseVersionResolver(
     connection: $app['db']->connection(),
     table: 'reference_versions',
 );
-$resolver = new CachedVersionResolver($inner, cacheTtl: 300);
+$resolver = new CachedVersionResolver($inner, ttl: 300);
 
-// First call: reads from DB, caches in APCu + PHP var
-// Subsequent calls within 5 min: returns from cache
+// First call: reads all rows from DB, stores in APCu
+// Subsequent calls within 5 min: filters rows from APCu by now()
 $version = $resolver->resolve();
 ```
 
-- **PHP var cache**: instant (same request)
-- **APCu cache**: sub-millisecond (cross-request, within same SAPI)
-- **DB/CSV**: only called when both caches miss (every `cache_ttl` seconds)
+- **PHP var cache**: pins the resolved version for the duration of the current request (Octane safe)
+- **APCu cache**: stores all version rows cross-request; refreshed every `cache_ttl` seconds
+- **DB/CSV**: only called on APCu miss
+
+When a new version's `activated_at` arrives, `resolve()` automatically returns it — no cache invalidation needed, because all rows are already cached and filtered on every call.
 
 `KuraServiceProvider` automatically creates and binds the appropriate resolver based on config.
 
@@ -331,8 +337,8 @@ Data version v3.0.0 released
     // CSV driver settings
     'csv_path' => '',  // absolute path to versions.csv
 
-    // How long to cache the resolved version in APCu (seconds)
-    // 0 = no caching (resolves every time)
+    // How long to cache all version rows in APCu (seconds)
+    // 0 = no caching (reads from DB/CSV on every request)
     'cache_ttl' => 300,
 ],
 ```

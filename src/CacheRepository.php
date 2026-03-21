@@ -49,7 +49,7 @@ class CacheRepository
 
     public function version(): string
     {
-        return $this->versionOverride ?? $this->loader->version() ?? '';
+        return (string) ($this->versionOverride ?? $this->loader->version());
     }
 
     /**

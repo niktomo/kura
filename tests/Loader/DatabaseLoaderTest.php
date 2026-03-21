@@ -21,6 +21,8 @@ use Orchestra\Testbench\TestCase;
  */
 class DatabaseLoaderTest extends TestCase
 {
+    private string $tmpDir;
+
     protected function getPackageProviders($app): array
     {
         return [KuraServiceProvider::class];
@@ -42,6 +44,16 @@ class DatabaseLoaderTest extends TestCase
     {
         parent::setUp();
 
+        $this->tmpDir = sys_get_temp_dir().'/kura_dbloader_test_'.uniqid();
+        mkdir($this->tmpDir.'/products', recursive: true);
+
+        $this->writeDefinesCsv($this->tmpDir.'/products', [
+            ['id', 'int', 'PK'],
+            ['name', 'string', 'Name'],
+            ['country', 'string', 'Country'],
+            ['price', 'int', 'Price'],
+        ]);
+
         assert($this->app !== null);
         $schema = $this->app['db']->connection()->getSchemaBuilder();
         $schema->create('products', function (Blueprint $table) {
@@ -58,6 +70,48 @@ class DatabaseLoaderTest extends TestCase
         ]);
     }
 
+    protected function tearDown(): void
+    {
+        parent::tearDown();
+        $this->removeDirectory($this->tmpDir);
+    }
+
+    // =========================================================================
+    // Helpers
+    // =========================================================================
+
+    /** @param list<list<string>> $rows */
+    private function writeDefinesCsv(string $dir, array $rows): void
+    {
+        $fp = fopen($dir.'/defines.csv', 'w');
+        assert($fp !== false);
+        fputcsv($fp, ['column', 'type', 'description'], escape: '');
+        foreach ($rows as $row) {
+            fputcsv($fp, $row, escape: '');
+        }
+        fclose($fp);
+    }
+
+    /** @param list<list<string>> $rows */
+    private function writeIndexesCsv(string $dir, array $rows): void
+    {
+        $fp = fopen($dir.'/indexes.csv', 'w');
+        assert($fp !== false);
+        fputcsv($fp, ['columns', 'unique'], escape: '');
+        foreach ($rows as $row) {
+            fputcsv($fp, $row, escape: '');
+        }
+        fclose($fp);
+    }
+
+    private function removeDirectory(string $dir): void
+    {
+        foreach (glob($dir.'/*') ?: [] as $item) {
+            is_dir($item) ? $this->removeDirectory($item) : unlink($item);
+        }
+        rmdir($dir);
+    }
+
     // =========================================================================
     // EloquentLoader
     // =========================================================================
@@ -67,8 +121,7 @@ class DatabaseLoaderTest extends TestCase
         // Given: a products table with 3 records
         $loader = new EloquentLoader(
             query: ProductModel::query(),
-            columns: ['id' => 'int', 'name' => 'string', 'country' => 'string', 'price' => 'int'],
-            indexDefinitions: [['columns' => ['country'], 'unique' => false]],
+            tableDirectory: $this->tmpDir.'/products',
             resolver: new StaticVersionResolver('v1.0.0'),
         );
 
@@ -80,31 +133,58 @@ class DatabaseLoaderTest extends TestCase
         $this->assertSame('Widget A', $records[0]['name'], 'First record should be Widget A');
     }
 
-    public function test_eloquent_loader_returns_columns(): void
+    public function test_eloquent_loader_returns_columns_from_defines_csv(): void
     {
+        // Given
         $loader = new EloquentLoader(
             query: ProductModel::query(),
-            columns: ['id' => 'int', 'name' => 'string'],
+            tableDirectory: $this->tmpDir.'/products',
         );
 
-        $this->assertSame(['id' => 'int', 'name' => 'string'], $loader->columns(), 'columns() should return configured columns');
+        // When / Then
+        $this->assertSame(
+            ['id' => 'int', 'name' => 'string', 'country' => 'string', 'price' => 'int'],
+            $loader->columns(),
+            'columns() should return definitions read from defines.csv',
+        );
     }
 
-    public function test_eloquent_loader_returns_indexes(): void
+    public function test_eloquent_loader_returns_indexes_from_indexes_csv(): void
     {
-        $indexes = [['columns' => ['country'], 'unique' => false]];
+        // Given
+        $this->writeIndexesCsv($this->tmpDir.'/products', [
+            ['country', 'false'],
+        ]);
         $loader = new EloquentLoader(
             query: ProductModel::query(),
-            indexDefinitions: $indexes,
+            tableDirectory: $this->tmpDir.'/products',
         );
 
-        $this->assertSame($indexes, $loader->indexes(), 'indexes() should return configured indexes');
+        // When / Then
+        $this->assertSame(
+            [['columns' => ['country'], 'unique' => false]],
+            $loader->indexes(),
+            'indexes() should return definitions read from indexes.csv',
+        );
+    }
+
+    public function test_eloquent_loader_returns_empty_indexes_when_no_csv(): void
+    {
+        // Given — no indexes.csv in directory
+        $loader = new EloquentLoader(
+            query: ProductModel::query(),
+            tableDirectory: $this->tmpDir.'/products',
+        );
+
+        // When / Then
+        $this->assertSame([], $loader->indexes(), 'indexes() should return empty array when indexes.csv is absent');
     }
 
     public function test_eloquent_loader_returns_version_from_resolver(): void
     {
         $loader = new EloquentLoader(
             query: ProductModel::query(),
+            tableDirectory: $this->tmpDir.'/products',
             resolver: new StaticVersionResolver('v2.0.0'),
         );
 
@@ -116,6 +196,7 @@ class DatabaseLoaderTest extends TestCase
         // Given: a query scoped to country=JP
         $loader = new EloquentLoader(
             query: ProductModel::query()->where('country', 'JP'),
+            tableDirectory: $this->tmpDir.'/products',
         );
 
         // When: loading
@@ -135,8 +216,7 @@ class DatabaseLoaderTest extends TestCase
         assert($this->app !== null);
         $loader = new QueryBuilderLoader(
             query: $this->app['db']->table('products'),
-            columns: ['id' => 'int', 'name' => 'string', 'country' => 'string', 'price' => 'int'],
-            indexDefinitions: [['columns' => ['country'], 'unique' => false]],
+            tableDirectory: $this->tmpDir.'/products',
             resolver: new StaticVersionResolver('v1.0.0'),
         );
 
@@ -148,27 +228,41 @@ class DatabaseLoaderTest extends TestCase
         $this->assertSame('Widget A', $records[0]['name'], 'First record should be Widget A');
     }
 
-    public function test_query_builder_loader_returns_columns(): void
+    public function test_query_builder_loader_returns_columns_from_defines_csv(): void
     {
+        // Given
         assert($this->app !== null);
         $loader = new QueryBuilderLoader(
             query: $this->app['db']->table('products'),
-            columns: ['id' => 'int', 'price' => 'int'],
+            tableDirectory: $this->tmpDir.'/products',
         );
 
-        $this->assertSame(['id' => 'int', 'price' => 'int'], $loader->columns(), 'columns() should return configured columns');
+        // When / Then
+        $this->assertSame(
+            ['id' => 'int', 'name' => 'string', 'country' => 'string', 'price' => 'int'],
+            $loader->columns(),
+            'columns() should return definitions read from defines.csv',
+        );
     }
 
-    public function test_query_builder_loader_returns_indexes(): void
+    public function test_query_builder_loader_returns_indexes_from_indexes_csv(): void
     {
+        // Given
+        $this->writeIndexesCsv($this->tmpDir.'/products', [
+            ['price', 'false'],
+        ]);
         assert($this->app !== null);
-        $indexes = [['columns' => ['price'], 'unique' => false]];
         $loader = new QueryBuilderLoader(
             query: $this->app['db']->table('products'),
-            indexDefinitions: $indexes,
+            tableDirectory: $this->tmpDir.'/products',
         );
 
-        $this->assertSame($indexes, $loader->indexes(), 'indexes() should return configured indexes');
+        // When / Then
+        $this->assertSame(
+            [['columns' => ['price'], 'unique' => false]],
+            $loader->indexes(),
+            'indexes() should return definitions read from indexes.csv',
+        );
     }
 
     public function test_query_builder_loader_returns_version_from_resolver(): void
@@ -176,6 +270,7 @@ class DatabaseLoaderTest extends TestCase
         assert($this->app !== null);
         $loader = new QueryBuilderLoader(
             query: $this->app['db']->table('products'),
+            tableDirectory: $this->tmpDir.'/products',
             resolver: new StaticVersionResolver('v3.0.0'),
         );
 
@@ -188,6 +283,7 @@ class DatabaseLoaderTest extends TestCase
         assert($this->app !== null);
         $loader = new QueryBuilderLoader(
             query: $this->app['db']->table('products')->where('price', '>', 150),
+            tableDirectory: $this->tmpDir.'/products',
         );
 
         // When: loading

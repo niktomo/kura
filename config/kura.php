@@ -21,7 +21,9 @@ return [
     'ttl' => [
         'ids' => 3600,
         'record' => 4800,
-        // 'index' — omit to match ids TTL (recommended), or set explicitly to override
+        // 'index' — omit to match ids TTL including jitter (recommended)
+        //           ids and indexes then expire together, preventing a window where
+        //           index keys are missing while ids is still present
         'ids_jitter' => 600,  // applied to both ids and index TTL
     ],
 
@@ -62,7 +64,7 @@ return [
      * driver:    'database' — resolve from DB table
      * table:     DB table name for version records
      * columns:   column name mapping
-     * cache_ttl: seconds to cache the resolved version in APCu (0 = no cache)
+     * cache_ttl: seconds to cache all version rows in APCu (0 = no cache)
      */
     'version' => [
         'driver' => 'database',       // 'database' or 'csv'

@@ -28,7 +28,8 @@ src/
 │   └── ExecutesQueries.php            Execution methods like get / first / find
 ├── Contracts/
 │   ├── ReferenceQueryBuilderInterface.php
-│   └── VersionResolverInterface.php   Common interface for version resolution
+│   ├── VersionResolverInterface.php   Common interface for version resolution
+│   └── VersionsLoaderInterface.php    Interface for loading all version rows
 ├── Console/
 │   ├── RebuildCommand.php             artisan kura:rebuild
 │   └── TokenCommand.php               artisan kura:token (generate Bearer token)
@@ -55,17 +56,20 @@ src/
 │   └── RebuildCacheJob.php            Async cache rebuild job
 ├── Loader/
 │   ├── LoaderInterface.php            Abstract interface for data retrieval
+│   ├── TableDefinitionReader.php      Reads defines.csv and indexes.csv
 │   ├── CsvLoader.php                  CSV-based loader (data.csv + defines.csv + indexes.csv)
-│   ├── CsvVersionResolver.php         Resolves active version from versions.csv
-│   ├── EloquentLoader.php             Eloquent model-based loader
-│   └── QueryBuilderLoader.php         Query builder-based loader
+│   ├── CsvVersionResolver.php         Loads all version rows from versions.csv (VersionsLoaderInterface)
+│   ├── EloquentLoader.php             Eloquent model-based loader (reads defines/indexes from tableDirectory)
+│   ├── QueryBuilderLoader.php         Query builder-based loader (reads defines/indexes from tableDirectory)
+│   └── StaticVersionResolver.php      Fixed version string resolver (for simple setups and tests)
 ├── Store/
 │   ├── StoreInterface.php             Abstract interface for APCu operations
 │   ├── ApcuStore.php                  Production APCu implementation
 │   └── ArrayStore.php                 In-memory implementation for tests
 ├── Version/
-│   ├── DatabaseVersionResolver.php    Resolves from DB reference_versions table
-│   └── CachedVersionResolver.php      Decorator (cached via APCu + PHP var)
+│   ├── DatabaseVersionResolver.php    Loads all version rows from DB table (VersionsLoaderInterface)
+│   ├── CachedVersionResolver.php      Caches all rows in APCu; filters by now() at resolve time
+│   └── SystemClock.php                PSR-20 ClockInterface implementation (returns current time)
 └── Support/
     ├── RecordCursor.php               Generator-based cursor (streaming, sorted, random)
     └── WhereEvaluator.php             Stateless where-condition evaluator (static methods)
@@ -103,9 +107,9 @@ If an index is declared in `LoaderInterface::indexes()` but the APCu key is miss
 
 Versions are resolved via `VersionResolverInterface`.
 
-- `DatabaseVersionResolver` (`src/Version/`) — DB `reference_versions` table (id, version, activated_at)
-- `CsvVersionResolver` (`src/Loader/`) — CSV versions.csv (id, version, activated_at)
-- `CachedVersionResolver` (`src/Version/`) — Decorator. Cached via APCu + PHP var (default 5 minutes)
+- `DatabaseVersionResolver` (`src/Version/`) — implements `VersionsLoaderInterface`; loads all rows from DB `reference_versions` table
+- `CsvVersionResolver` (`src/Loader/`) — implements `VersionsLoaderInterface`; loads all rows from versions.csv
+- `CachedVersionResolver` (`src/Version/`) — wraps `VersionsLoaderInterface`; caches all rows in APCu, filters by `clock->now()` at each `resolve()` call (default TTL: 5 minutes)
 
 When the version changes, cache keys change accordingly, and old caches naturally expire via TTL.
 

@@ -26,14 +26,14 @@ Load data once from CSV or DB, store it in APCu, and query it with the same flue
 
 ## Requirements
 
-- PHP ^8.2
-- Laravel ^10.0 / ^11.0 / ^12.0
+- PHP 8.2 / 8.3 / 8.4 (8.5+ expected to work)
+- Laravel ^10.0 / ^11.0 / ^12.0 / ^13.0
 - APCu extension (`pecl install apcu`)
 
 ## Installation
 
 ```bash
-composer require tomonori/kura
+composer require niktomo/kura
 php artisan vendor:publish --tag=kura-config
 ```
 
@@ -54,7 +54,7 @@ return [
     'version' => [
         'driver'    => 'csv',                           // 'csv' or 'database'
         'csv_path'  => base_path('data/versions.csv'),  // path to versions.csv
-        'cache_ttl' => 300,                             // cache resolved version for 5 min
+        'cache_ttl' => 300,                             // cache all version rows in APCu for 5 min
     ],
 
     // Rebuild strategy — what happens when cache is missing
@@ -117,7 +117,7 @@ prefecture|city,false
 - `unique`: `true` / `false`
 - Composite indexes (`col1|col2`) enable O(1) multi-column equality lookups
 
-> **Tip:** If `indexes.csv` is absent, you can pass `indexDefinitions` to `CsvLoader` directly (see [Register tables](#3-register-tables)).
+> **Tip:** If no indexes are needed, simply omit `indexes.csv`. All loaders will return an empty index list.
 
 **stations/data.csv** — the actual data, with a `version` column:
 ```csv
@@ -133,23 +133,35 @@ The CsvLoader loads rows where `version IS NULL` (always loaded, shared across a
 
 #### Option B: Database (Eloquent)
 
-No CSV files needed — load directly from your database:
+No data CSV needed — load directly from your database. Column definitions and index declarations are read from the same `defines.csv` / `indexes.csv` files as the CSV loader:
+
+```
+data/stations/
+├── defines.csv    # column type definitions (required)
+└── indexes.csv    # index declarations (optional)
+```
 
 ```php
 use Kura\Loader\EloquentLoader;
+use Kura\Loader\StaticVersionResolver;
 
 $loader = new EloquentLoader(
     query: Station::query(),
-    columns: [
-        'id' => 'int', 'name' => 'string', 'prefecture' => 'string',
-        'city' => 'string', 'lat' => 'float', 'lng' => 'float',
-        'line_id' => 'int',
-    ],
-    indexDefinitions: [
-        ['columns' => ['prefecture'], 'unique' => false],
-        ['columns' => ['line_id'], 'unique' => false],
-    ],
-    version: 'v1.0.0',
+    tableDirectory: base_path('data/stations'),
+    resolver: new StaticVersionResolver('v1.0.0'),
+);
+```
+
+Or with the version-managed resolver (recommended for production):
+
+```php
+use Kura\Loader\EloquentLoader;
+use Kura\Contracts\VersionResolverInterface;
+
+$loader = new EloquentLoader(
+    query: Station::query(),
+    tableDirectory: base_path('data/stations'),
+    resolver: app(VersionResolverInterface::class),
 );
 ```
 
@@ -226,10 +238,6 @@ public function boot(): void
     Kura::register('stations', new CsvLoader(
         tableDirectory: base_path('data/stations'),
         resolver: $resolver,
-        indexDefinitions: [
-            ['columns' => ['prefecture'], 'unique' => false],
-            ['columns' => ['line_id'], 'unique' => false],
-        ],
     ), primaryKey: 'id');
 
     // You can register multiple tables
@@ -356,35 +364,132 @@ Kura implements ~99 methods from Laravel's QueryBuilder. For the complete list, 
 
 ## Configuration
 
-See [`config/kura.php`](config/kura.php) for all available options. Per-table overrides are supported:
+All options are in [`config/kura.php`](config/kura.php). Below is the complete reference.
 
 ```php
-'tables' => [
-    'stations' => [
-        'ttl' => ['record' => 7200],
+return [
+    // APCu key prefix
+    'prefix' => 'kura',
+
+    // TTL in seconds per cache type
+    'ttl' => [
+        'ids'        => 3600,   // rebuild trigger — expiry causes next query to rebuild
+        'record'     => 4800,   // longer than ids so records survive across rebuilds
+        // 'index'   => omit to match ids TTL including jitter (recommended)
+        //              ids and indexes then expire together, preventing a window where
+        //              index keys are missing while ids is still present
+        'ids_jitter' => 600,    // random 0–N seconds added to ids and index TTL (thundering herd prevention)
     ],
-],
+
+    // Rebuild lock TTL (seconds). Set to 1.5–2× the expected Loader execution time.
+    'lock_ttl' => 60,
+
+    // Rebuild strategy
+    'rebuild' => [
+        // 'sync'     — rebuild synchronously in the current request
+        // 'queue'    — async via Laravel queue job
+        // 'callback' — custom callable; set 'callback' below
+        'strategy' => 'sync',
+
+        // Required when strategy = 'callback'
+        // callable(\Kura\CacheRepository $repository): void
+        'callback' => null,
+
+        // Used when strategy = 'queue'
+        'queue' => [
+            'connection' => null,   // queue connection (null = default)
+            'queue'      => null,   // queue name (null = default)
+            'retry'      => 3,      // max attempts
+        ],
+    ],
+
+    // Version resolution
+    'version' => [
+        'driver' => 'database',             // 'database' or 'csv'
+
+        // database driver
+        'table'   => 'reference_versions',
+        'columns' => [
+            'version'      => 'version',      // column name for the version string
+            'activated_at' => 'activated_at', // column name for activation timestamp
+        ],
+
+        // csv driver
+        'csv_path' => '',                   // absolute path to versions.csv
+
+        // Seconds to cache all version rows in APCu (0 = no cache, re-reads every request)
+        'cache_ttl' => 300,
+    ],
+
+    // Cache warm endpoint
+    'warm' => [
+        'enabled'           => false,
+        'token'             => env('KURA_WARM_TOKEN', ''),  // Bearer token (required)
+        'path'              => 'kura/warm',                 // URL path
+        'controller'        => \Kura\Http\Controllers\WarmController::class,
+        'status_controller' => \Kura\Http\Controllers\WarmStatusController::class,
+    ],
+
+    // CSV auto-discovery
+    'csv' => [
+        'base_path'     => '',     // directory to scan for table subdirectories
+        'auto_discover' => false,  // enable auto-registration of CSV tables
+    ],
+
+    // Per-table overrides (primary_key and/or ttl)
+    'tables' => [
+        // 'products' => [
+        //     'primary_key' => 'product_code',  // override primary key (default: 'id')
+        //     'ttl' => ['record' => 7200],       // override specific TTL values
+        // ],
+    ],
+];
 ```
 
 ## Benchmarks
 
-Measured on Apple M4 Pro / PHP 8.4.19 / APCu 5.1.28 (`apc.shm_size=256M`), Docker (linux/arm64).
-Each scenario runs 500 iterations; p95 latency shown.
+### Environment
+
+| | |
+|---|---|
+| Host | Apple M4 Pro |
+| Runtime | Docker linux/aarch64 |
+| PHP | 8.4.19 |
+| APCu | 5.1.28 (`apc.shm_size=256M`) |
+| Iterations | 500 per scenario |
+| Metric | p95 latency |
+
+### Dataset
+
+Synthetic product records with the following schema and indexes:
+
+| Column | Type | Cardinality |
+|---|---|---|
+| `id` | int | unique (1…N) |
+| `name` | string | unique |
+| `country` | string | 5 values (JP / US / GB / DE / FR), evenly distributed |
+| `category` | string | 10 values (electronics / clothing / …), evenly distributed |
+| `price` | float | 200 distinct values (1.99–200.99), cyclic |
+| `active` | bool | 67% true / 33% false |
+
+Indexes declared: `country`, `price`, `country|category` (composite).
+
+### Results (p95 latency)
 
 | Scenario | 1K records | 10K records | 100K records |
 |---|---|---|---|
-| `find($id)` — single record | **0.9 µs** | **0.9 µs** | **0.9 µs** |
-| `where('country','JP')` — indexed `=` | **134 µs** | **1.2 ms** | **15 ms** |
-| `where('country','JP')->where('category','...')` — composite index | **104 µs** | **936 µs** | **11 ms** |
-| `whereBetween('price', [50,100])` — range index | **182 µs** | **1.5 ms** | **17 ms** |
-| `where(...)->orderBy('price')->get()` — index walk | **182 µs** | **1.6 ms** | **19 ms** |
-| `where('active', true)` — non-indexed (full scan) | 460 µs | 4.5 ms | 49 ms |
-| `get()` — all records | 364 µs | 3.5 ms | 37 ms |
-| Cache build (`rebuild()`) | 2.9 ms | 11.3 ms | 114 ms |
+| `find($id)` — single record lookup | **0.9 µs** | **1.0 µs** | **0.9 µs** |
+| `where('country','JP')` — indexed `=` (20% hit) | **139 µs** | **1.3 ms** | **15 ms** |
+| `where('country','JP')->where('category','electronics')` — composite index (2% hit) | **101 µs** | **951 µs** | **11 ms** |
+| `whereBetween('price', [50,100])` — range index (25% hit) | **180 µs** | **1.7 ms** | **18 ms** |
+| `where('country','JP')->orderBy('price')` — index walk | **186 µs** | **1.6 ms** | **21 ms** |
+| `where('active', true)` — non-indexed full scan (67% hit) | 483 µs | 6.2 ms | 53 ms |
+| `get()` — all records | 387 µs | 3.7 ms | 39 ms |
+| Cache build (`rebuild()`) | 3.0 ms | 11.1 ms | 117 ms |
 
-Index-accelerated queries (**bold**) are 3–5× faster than full scans at all scales.
-At 100K records, indexed queries stay under 19 ms; full scans reach ~49 ms.
-`orderBy` on an indexed column uses an index walk (pre-sorted in APCu) — no PHP sort needed.
+Index-accelerated queries (**bold**) are 3–5× faster than full scans at the same dataset size.
+At 100K records, indexed queries respond in under 21 ms; a non-indexed full scan takes ~53 ms.
+`orderBy` on an indexed column uses a pre-sorted index walk — no PHP sort needed.
 
 > Run `php benchmarks/benchmark.php` in the Docker environment to reproduce.
 

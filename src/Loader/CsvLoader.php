@@ -11,6 +11,7 @@ use Kura\Contracts\VersionResolverInterface;
  *   {tableDirectory}/
  *     data.csv      — all rows with a 'version' column
  *     defines.csv   — column,type,description
+ *     indexes.csv   — columns,unique  (optional)
  *
  * Loading rule:
  *   version IS NULL (empty)  → always loaded (shared across all versions)
@@ -21,18 +22,15 @@ use Kura\Contracts\VersionResolverInterface;
  */
 final class CsvLoader implements LoaderInterface
 {
-    /** @var list<array{columns: list<string>, unique: bool}>|null */
-    private ?array $loadedIndexes = null;
+    private readonly TableDefinitionReader $definitions;
 
-    /**
-     * @param  list<array{columns: list<string>, unique: bool}>  $indexDefinitions
-     */
     public function __construct(
         private readonly string $tableDirectory,
         private readonly VersionResolverInterface $resolver,
-        private readonly array $indexDefinitions = [],
         private readonly string $versionColumn = 'version',
-    ) {}
+    ) {
+        $this->definitions = new TableDefinitionReader($tableDirectory);
+    }
 
     /**
      * @return \Generator<int, array<string, mixed>>
@@ -49,7 +47,7 @@ final class CsvLoader implements LoaderInterface
             return;
         }
 
-        $types = $this->loadDefines();
+        $types = $this->definitions->columns();
 
         $fp = fopen($dataFile, 'r');
         if ($fp === false) {
@@ -91,10 +89,10 @@ final class CsvLoader implements LoaderInterface
         }
     }
 
-    /** @return array<string, string> column => type */
+    /** @return array<string, string> */
     public function columns(): array
     {
-        return $this->loadDefines();
+        return $this->definitions->columns();
     }
 
     /**
@@ -102,86 +100,12 @@ final class CsvLoader implements LoaderInterface
      */
     public function indexes(): array
     {
-        if ($this->indexDefinitions !== []) {
-            return $this->indexDefinitions;
-        }
-
-        return $this->loadedIndexes ??= $this->loadIndexes();
+        return $this->definitions->indexes();
     }
 
     public function version(): string
     {
         return $this->resolver->resolve() ?? '';
-    }
-
-    /** @return array<string, string> column => type */
-    private function loadDefines(): array
-    {
-        $definesFile = $this->tableDirectory.'/defines.csv';
-        if (! file_exists($definesFile)) {
-            return [];
-        }
-
-        $fp = fopen($definesFile, 'r');
-        if ($fp === false) {
-            return [];
-        }
-
-        fgetcsv($fp, escape: ''); // Skip header
-
-        $types = [];
-        while (($row = fgetcsv($fp, escape: '')) !== false) {
-            if (count($row) >= 2 && $row[0] !== null && $row[1] !== null) {
-                $types[$row[0]] = $row[1];
-            }
-        }
-
-        fclose($fp);
-
-        return $types;
-    }
-
-    /**
-     * @return list<array{columns: list<string>, unique: bool}>
-     */
-    private function loadIndexes(): array
-    {
-        $indexesFile = $this->tableDirectory.'/indexes.csv';
-        if (! file_exists($indexesFile)) {
-            return [];
-        }
-
-        $fp = fopen($indexesFile, 'r');
-        if ($fp === false) {
-            return [];
-        }
-
-        fgetcsv($fp, escape: ''); // Skip header
-
-        $indexes = [];
-        while (($row = fgetcsv($fp, escape: '')) !== false) {
-            if (count($row) < 2 || $row[0] === null || $row[1] === null) {
-                continue;
-            }
-
-            $columns = array_values(array_filter(
-                explode('|', $row[0]),
-                fn (string $c) => $c !== '',
-            ));
-
-            if ($columns === []) {
-                continue;
-            }
-
-            $indexes[] = [
-                'columns' => $columns,
-                'unique' => $row[1] === 'true',
-            ];
-        }
-
-        fclose($fp);
-
-        return $indexes;
     }
 
     private function cast(mixed $value, string $type): mixed

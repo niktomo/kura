@@ -28,7 +28,8 @@ src/
 │   └── ExecutesQueries.php            get / first / find など実行系メソッド群
 ├── Contracts/
 │   ├── ReferenceQueryBuilderInterface.php
-│   └── VersionResolverInterface.php   バージョン解決の共通インターフェース
+│   ├── VersionResolverInterface.php   バージョン解決の共通インターフェース
+│   └── VersionsLoaderInterface.php    全バージョン行を読み込むインターフェース
 ├── Console/
 │   ├── RebuildCommand.php             artisan kura:rebuild
 │   └── TokenCommand.php               artisan kura:token（Bearer トークン生成）
@@ -55,17 +56,20 @@ src/
 │   └── RebuildCacheJob.php            非同期キャッシュ再構築ジョブ
 ├── Loader/
 │   ├── LoaderInterface.php            データ取得の抽象インターフェース
+│   ├── TableDefinitionReader.php      defines.csv / indexes.csv を読み込む
 │   ├── CsvLoader.php                  CSV ベースの Loader（data.csv + defines.csv + indexes.csv）
-│   ├── CsvVersionResolver.php         versions.csv からアクティブバージョンを解決
-│   ├── EloquentLoader.php             Eloquent モデルベースの Loader
-│   └── QueryBuilderLoader.php         QueryBuilder ベースの Loader
+│   ├── CsvVersionResolver.php         versions.csv から全バージョン行を読み込む（VersionsLoaderInterface）
+│   ├── EloquentLoader.php             Eloquent モデルベースの Loader（defines/indexes は tableDirectory から読込）
+│   ├── QueryBuilderLoader.php         QueryBuilder ベースの Loader（defines/indexes は tableDirectory から読込）
+│   └── StaticVersionResolver.php      固定バージョン文字列のリゾルバー（シンプルな構成・テスト用）
 ├── Store/
 │   ├── StoreInterface.php             APCu 操作の抽象インターフェース
 │   ├── ApcuStore.php                  本番用 APCu 実装
 │   └── ArrayStore.php                 テスト用インメモリ実装
 ├── Version/
-│   ├── DatabaseVersionResolver.php    DB reference_versions テーブルから解決
-│   └── CachedVersionResolver.php      デコレータ（APCu + PHP var でキャッシュ）
+│   ├── DatabaseVersionResolver.php    DB テーブルから全バージョン行を読み込む（VersionsLoaderInterface）
+│   ├── CachedVersionResolver.php      全行を APCu にキャッシュし、resolve() のたびに now() でフィルタ
+│   └── SystemClock.php                PSR-20 ClockInterface 実装（現在時刻を返す）
 └── Support/
     ├── RecordCursor.php               Generator ベースのカーソル（streaming / sorted / random）
     └── WhereEvaluator.php             ステートレスな where 条件評価器（static メソッド）
@@ -103,9 +107,9 @@ TTL は `config/kura.php` で設定。`ids` が最短（再構築トリガーの
 
 バージョンは `VersionResolverInterface` で解決する。
 
-- `DatabaseVersionResolver`（`src/Version/`）— DB `reference_versions` テーブル（id, version, activated_at）
-- `CsvVersionResolver`（`src/Loader/`）— CSV versions.csv（id, version, activated_at）
-- `CachedVersionResolver`（`src/Version/`）— デコレータ。APCu + PHP var でキャッシュ（default 5分）
+- `DatabaseVersionResolver`（`src/Version/`）— `VersionsLoaderInterface` 実装。DB `reference_versions` テーブルから全行を読み込む
+- `CsvVersionResolver`（`src/Loader/`）— `VersionsLoaderInterface` 実装。versions.csv から全行を読み込む
+- `CachedVersionResolver`（`src/Version/`）— `VersionsLoaderInterface` をラップ。全行を APCu にキャッシュし、`resolve()` のたびに `clock->now()` でフィルタ（デフォルト TTL: 5分）
 
 version が変わるとキャッシュキーが変わり、旧キャッシュは自然に TTL 消滅する。
 

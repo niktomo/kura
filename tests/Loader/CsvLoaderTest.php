@@ -406,37 +406,7 @@ class CsvLoaderTest extends TestCase
         $this->assertTrue($indexes[0]['unique'], 'unique=true in CSV should result in unique:true');
     }
 
-    public function test_constructor_index_definitions_take_precedence_over_csv(): void
-    {
-        // Arrange — both constructor arg and indexes.csv exist
-        $this->writeVersionsCsv([
-            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
-        ]);
-        $this->writeCsv($this->tmpDir.'/products/indexes.csv',
-            ['columns', 'unique'],
-            [['from_csv', 'false']],
-        );
-
-        $constructorIndexes = [['columns' => ['from_constructor'], 'unique' => true]];
-        $loader = new CsvLoader(
-            tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver('v1.0.0'),
-            indexDefinitions: $constructorIndexes,
-        );
-
-        // Act
-        $indexes = $loader->indexes();
-
-        // Assert — constructor arg wins over indexes.csv
-        $this->assertCount(1, $indexes, 'Should use constructor definitions, not CSV');
-        $this->assertSame(
-            ['from_constructor'],
-            $indexes[0]['columns'],
-            'Constructor indexDefinitions should take precedence over indexes.csv',
-        );
-    }
-
-    public function test_indexes_returns_empty_when_no_csv_and_no_constructor_arg(): void
+    public function test_indexes_returns_empty_when_no_csv(): void
     {
         // Arrange — no indexes.csv, no constructor arg
         $this->writeVersionsCsv([
