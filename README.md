@@ -27,7 +27,7 @@ Load data once from CSV or DB, store it in APCu, and query it with the same flue
 ## Requirements
 
 - PHP 8.3 / 8.4 (8.5+ expected to work)
-- Laravel ^10.0 / ^11.0 / ^12.0 / ^13.0
+- Laravel ^12.0 / ^13.0
 - APCu extension (`pecl install apcu`)
 
 ## Installation
