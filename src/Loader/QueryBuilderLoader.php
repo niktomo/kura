@@ -3,6 +3,7 @@
 namespace Kura\Loader;
 
 use Illuminate\Database\Query\Builder;
+use Kura\Contracts\VersionResolverInterface;
 
 /**
  * Loads records from a database table via Laravel's Query Builder.
@@ -11,11 +12,16 @@ use Illuminate\Database\Query\Builder;
  *   new QueryBuilderLoader(
  *       query: DB::table('products')->where('active', true),
  *       columns: ['id' => 'int', 'name' => 'string', 'price' => 'int'],
- *       indexes: [['columns' => ['category'], 'unique' => false]],
- *       version: 'v1',
+ *       indexDefinitions: [['columns' => ['category'], 'unique' => false]],
+ *       resolver: app(VersionResolverInterface::class),
  *   )
  *
  * The query is executed via cursor() for low memory usage.
+ *
+ * Note: Unlike CsvLoader, this loader does NOT filter rows by version.
+ * Version-based data scoping must be handled by the query itself
+ * (e.g. ->where('version', $resolver->resolve())).
+ * The resolver is used solely to determine the APCu cache key.
  */
 final class QueryBuilderLoader implements LoaderInterface
 {
@@ -27,7 +33,7 @@ final class QueryBuilderLoader implements LoaderInterface
         private readonly Builder $query,
         private readonly array $columns = [],
         private readonly array $indexDefinitions = [],
-        private readonly string $version = 'v1',
+        private readonly VersionResolverInterface $resolver = new StaticVersionResolver('v1'),
     ) {}
 
     /**
@@ -56,6 +62,6 @@ final class QueryBuilderLoader implements LoaderInterface
 
     public function version(): string
     {
-        return $this->version;
+        return $this->resolver->resolve() ?? '';
     }
 }

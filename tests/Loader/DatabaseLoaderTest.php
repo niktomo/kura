@@ -6,6 +6,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Kura\KuraServiceProvider;
 use Kura\Loader\EloquentLoader;
 use Kura\Loader\QueryBuilderLoader;
+use Kura\Loader\StaticVersionResolver;
 use Kura\Store\ArrayStore;
 use Kura\Store\StoreInterface;
 use Kura\Tests\Support\ProductModel;
@@ -68,7 +69,7 @@ class DatabaseLoaderTest extends TestCase
             query: ProductModel::query(),
             columns: ['id' => 'int', 'name' => 'string', 'country' => 'string', 'price' => 'int'],
             indexDefinitions: [['columns' => ['country'], 'unique' => false]],
-            version: 'v1.0.0',
+            resolver: new StaticVersionResolver('v1.0.0'),
         );
 
         // When: loading records
@@ -100,14 +101,14 @@ class DatabaseLoaderTest extends TestCase
         $this->assertSame($indexes, $loader->indexes(), 'indexes() should return configured indexes');
     }
 
-    public function test_eloquent_loader_returns_version(): void
+    public function test_eloquent_loader_returns_version_from_resolver(): void
     {
         $loader = new EloquentLoader(
             query: ProductModel::query(),
-            version: 'v2.0.0',
+            resolver: new StaticVersionResolver('v2.0.0'),
         );
 
-        $this->assertSame('v2.0.0', $loader->version(), 'version() should return configured version');
+        $this->assertSame('v2.0.0', $loader->version(), 'version() should return the version resolved by the resolver');
     }
 
     public function test_eloquent_loader_with_query_scope(): void
@@ -136,7 +137,7 @@ class DatabaseLoaderTest extends TestCase
             query: $this->app['db']->table('products'),
             columns: ['id' => 'int', 'name' => 'string', 'country' => 'string', 'price' => 'int'],
             indexDefinitions: [['columns' => ['country'], 'unique' => false]],
-            version: 'v1.0.0',
+            resolver: new StaticVersionResolver('v1.0.0'),
         );
 
         // When: loading records
@@ -170,15 +171,15 @@ class DatabaseLoaderTest extends TestCase
         $this->assertSame($indexes, $loader->indexes(), 'indexes() should return configured indexes');
     }
 
-    public function test_query_builder_loader_returns_version(): void
+    public function test_query_builder_loader_returns_version_from_resolver(): void
     {
         assert($this->app !== null);
         $loader = new QueryBuilderLoader(
             query: $this->app['db']->table('products'),
-            version: 'v3.0.0',
+            resolver: new StaticVersionResolver('v3.0.0'),
         );
 
-        $this->assertSame('v3.0.0', $loader->version(), 'version() should return configured version');
+        $this->assertSame('v3.0.0', $loader->version(), 'version() should return the version resolved by the resolver');
     }
 
     public function test_query_builder_loader_with_where_clause(): void

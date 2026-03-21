@@ -3,6 +3,7 @@
 namespace Kura;
 
 use Illuminate\Config\Repository;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Kura\Console\RebuildCommand;
@@ -20,6 +21,8 @@ use Kura\Store\ApcuStore;
 use Kura\Store\StoreInterface;
 use Kura\Version\CachedVersionResolver;
 use Kura\Version\DatabaseVersionResolver;
+use Kura\Version\SystemClock;
+use Laravel\Octane\Events\RequestReceived;
 
 class KuraServiceProvider extends ServiceProvider
 {
@@ -58,11 +61,12 @@ class KuraServiceProvider extends ServiceProvider
                 default => throw new \InvalidArgumentException("Unknown version driver: {$driver}"),
             };
 
-            if ($cacheTtl > 0) {
-                return new CachedVersionResolver($inner, ttl: $cacheTtl);
-            }
-
-            return $inner;
+            return new CachedVersionResolver(
+                inner: $inner,
+                clock: new SystemClock,
+                ttl: $cacheTtl,
+                useApcu: $cacheTtl > 0,
+            );
         });
 
         $this->app->singleton(KuraManager::class, function ($app) {
@@ -100,6 +104,7 @@ class KuraServiceProvider extends ServiceProvider
 
         $this->registerWarmRoute();
         $this->autoDiscoverCsvTables();
+        $this->registerOctaneListeners();
     }
 
     /**
@@ -125,12 +130,7 @@ class KuraServiceProvider extends ServiceProvider
             return;
         }
 
-        $versionsFile = $basePath.'/versions.csv';
-        /** @var int $cacheTtl */
-        $cacheTtl = $config->get('kura.version.cache_ttl', 300);
-
-        $inner = new CsvVersionResolver($versionsFile);
-        $resolver = $cacheTtl > 0 ? new CachedVersionResolver($inner, ttl: $cacheTtl) : $inner;
+        $resolver = $this->app->make(VersionResolverInterface::class);
 
         $manager = $this->app->make(KuraManager::class);
         /** @var array<string, array{primary_key?: string}> $tableOverrides */
@@ -165,6 +165,32 @@ class KuraServiceProvider extends ServiceProvider
                 $primaryKey,
             );
         }
+    }
+
+    /**
+     * Register Octane request lifecycle listeners to reset per-request state.
+     *
+     * In a persistent process (Octane, RoadRunner), singletons survive across
+     * requests. We reset the PHP-var version cache and KuraManager state at the
+     * start of each request so that versionOverride and cached repositories do
+     * not bleed from one request into the next.
+     */
+    private function registerOctaneListeners(): void
+    {
+        if (! class_exists(RequestReceived::class)) {
+            return;
+        }
+
+        $this->app->make(Dispatcher::class)->listen(
+            RequestReceived::class,
+            function (): void {
+                $resolver = $this->app->make(VersionResolverInterface::class);
+                if ($resolver instanceof CachedVersionResolver) {
+                    $resolver->resetRequestCache();
+                }
+                $this->app->make(KuraManager::class)->resetForRequest();
+            },
+        );
     }
 
     private function registerWarmRoute(): void

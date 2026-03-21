@@ -163,6 +163,21 @@ class KuraManager
     }
 
     /**
+     * Reset per-request state.
+     *
+     * Call this at the start of each request (e.g. via Octane RequestReceived)
+     * to clear the version override and cached repository/processor instances.
+     * This ensures that versionOverride set in one request does not leak into
+     * the next request in a persistent process (Octane, RoadRunner, etc.).
+     */
+    public function resetForRequest(): void
+    {
+        $this->versionOverride = null;
+        $this->repositories = [];
+        $this->processors = [];
+    }
+
+    /**
      * Get all registered table names.
      *
      * @return list<string>

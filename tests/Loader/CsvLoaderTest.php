@@ -2,10 +2,13 @@
 
 namespace Kura\Tests\Loader;
 
-use DateTimeImmutable;
+use Kura\Contracts\VersionResolverInterface;
 use Kura\Loader\CsvLoader;
-use Kura\Loader\CsvVersionResolver;
+use Kura\Loader\StaticVersionResolver;
 use PHPUnit\Framework\TestCase;
+
+// Note: writeVersionsCsv() is kept as a helper but no longer required for CsvLoader;
+// CsvLoader uses VersionResolverInterface directly (StaticVersionResolver in tests).
 
 /**
  * Unit tests (AAA format) for CsvLoader.
@@ -74,12 +77,19 @@ class CsvLoaderTest extends TestCase
         fclose($fp);
     }
 
-    private function makeResolver(DateTimeImmutable $now): CsvVersionResolver
+    private function makeResolver(?string $version): VersionResolverInterface
     {
-        return new CsvVersionResolver(
-            $this->tmpDir.'/versions.csv',
-            $now,
-        );
+        if ($version === null) {
+            return new class implements VersionResolverInterface
+            {
+                public function resolve(): ?string
+                {
+                    return null;
+                }
+            };
+        }
+
+        return new StaticVersionResolver($version);
     }
 
     // =========================================================================
@@ -89,9 +99,6 @@ class CsvLoaderTest extends TestCase
     public function test_loads_rows_matching_active_version(): void
     {
         // Arrange
-        $this->writeVersionsCsv([
-            ['id' => 1, 'version' => 'v2.0.0', 'activated_at' => '2024-01-01 00:00:00'],
-        ]);
         $this->writeCsv($this->tmpDir.'/products/defines.csv',
             ['column', 'type', 'description'],
             [['id', 'int', 'PK'], ['name', 'string', 'Name'], ['version', 'string', 'Ver']],
@@ -107,7 +114,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v2.0.0'),
         );
 
         // Act
@@ -122,9 +129,6 @@ class CsvLoaderTest extends TestCase
     public function test_null_version_rows_are_always_loaded(): void
     {
         // Arrange
-        $this->writeVersionsCsv([
-            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
-        ]);
         $this->writeCsv($this->tmpDir.'/products/defines.csv',
             ['column', 'type', 'description'],
             [['id', 'int', 'PK'], ['name', 'string', 'Name'], ['version', 'string', 'Ver']],
@@ -141,7 +145,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act
@@ -155,11 +159,7 @@ class CsvLoaderTest extends TestCase
 
     public function test_active_version_is_the_latest_activated_one(): void
     {
-        // Arrange — two versions registered; v1.1.0 is the active one at query time
-        $this->writeVersionsCsv([
-            ['id' => 1, 'version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
-            ['id' => 2, 'version' => 'v1.1.0', 'activated_at' => '2024-06-01 00:00:00'],
-        ]);
+        // Arrange — v1.1.0 is the active version
         $this->writeCsv($this->tmpDir.'/products/defines.csv',
             ['column', 'type', 'description'],
             [['id', 'int', 'PK'], ['name', 'string', 'Name'], ['version', 'string', 'Ver']],
@@ -175,7 +175,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-07-01')),
+            resolver: $this->makeResolver('v1.1.0'),
         );
 
         // Act
@@ -214,7 +214,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act
@@ -244,7 +244,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act
@@ -271,7 +271,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-01-01')),
+            resolver: $this->makeResolver(null),
         );
 
         // Act / Assert
@@ -292,7 +292,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act / Assert
@@ -316,7 +316,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act / Assert — version column required
@@ -340,7 +340,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act
@@ -366,7 +366,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act
@@ -395,7 +395,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act
@@ -420,7 +420,7 @@ class CsvLoaderTest extends TestCase
         $constructorIndexes = [['columns' => ['from_constructor'], 'unique' => true]];
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
             indexDefinitions: $constructorIndexes,
         );
 
@@ -446,7 +446,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act
@@ -469,7 +469,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act — call twice, then overwrite the file to verify result is cached
@@ -503,7 +503,7 @@ class CsvLoaderTest extends TestCase
 
         $loader = new CsvLoader(
             tableDirectory: $this->tmpDir.'/products',
-            resolver: $this->makeResolver(new DateTimeImmutable('2024-06-01')),
+            resolver: $this->makeResolver('v1.0.0'),
         );
 
         // Act / Assert

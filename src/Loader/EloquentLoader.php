@@ -3,6 +3,7 @@
 namespace Kura\Loader;
 
 use Illuminate\Database\Eloquent\Builder;
+use Kura\Contracts\VersionResolverInterface;
 
 /**
  * Loads records from an Eloquent model/query.
@@ -11,12 +12,17 @@ use Illuminate\Database\Eloquent\Builder;
  *   new EloquentLoader(
  *       query: Product::query()->where('active', true),
  *       columns: ['id' => 'int', 'name' => 'string', 'price' => 'int'],
- *       indexes: [['columns' => ['category'], 'unique' => false]],
- *       version: 'v1',
+ *       indexDefinitions: [['columns' => ['category'], 'unique' => false]],
+ *       resolver: app(VersionResolverInterface::class),
  *   )
  *
  * Records are converted to arrays via toArray().
  * The query is executed via cursor() for low memory usage.
+ *
+ * Note: Unlike CsvLoader, this loader does NOT filter rows by version.
+ * Version-based data scoping must be handled by the query itself
+ * (e.g. ->where('version', $resolver->resolve())).
+ * The resolver is used solely to determine the APCu cache key.
  */
 final class EloquentLoader implements LoaderInterface
 {
@@ -31,7 +37,7 @@ final class EloquentLoader implements LoaderInterface
         private readonly Builder $query,
         private readonly array $columns = [],
         private readonly array $indexDefinitions = [],
-        private readonly string $version = 'v1',
+        private readonly VersionResolverInterface $resolver = new StaticVersionResolver('v1'),
     ) {}
 
     /**
@@ -60,6 +66,6 @@ final class EloquentLoader implements LoaderInterface
 
     public function version(): string
     {
-        return $this->version;
+        return $this->resolver->resolve() ?? '';
     }
 }

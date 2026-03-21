@@ -15,17 +15,13 @@ use Kura\Store\StoreInterface;
  */
 class CacheRepository
 {
-    private readonly string $version;
-
     public function __construct(
         private readonly string $table,
         private readonly string $primaryKey,
         private readonly StoreInterface $store,
         private readonly LoaderInterface $loader,
-        ?string $versionOverride = null,
-    ) {
-        $this->version = $versionOverride ?? (string) $this->loader->version();
-    }
+        private readonly ?string $versionOverride = null,
+    ) {}
 
     // -------------------------------------------------------------------------
     // Public API
@@ -53,7 +49,7 @@ class CacheRepository
 
     public function version(): string
     {
-        return $this->version;
+        return $this->versionOverride ?? $this->loader->version() ?? '';
     }
 
     /**

@@ -9,11 +9,11 @@ use Kura\Version\DatabaseVersionResolver;
 use Orchestra\Testbench\TestCase;
 
 /**
- * Feature: Resolve active version from reference_versions table.
+ * Feature: Load all version rows from reference_versions table.
  *
  * Given a reference_versions table with id, version, activated_at,
- * When resolving the active version,
- * Then the latest version whose activated_at <= now() is returned.
+ * When loading all rows,
+ * Then all rows are returned as an array (no filtering — filtering is done by CachedVersionResolver).
  */
 class DatabaseVersionResolverTest extends TestCase
 {
@@ -55,58 +55,50 @@ class DatabaseVersionResolverTest extends TestCase
         );
     }
 
-    public function test_resolves_latest_active_version(): void
+    public function test_loads_all_rows_ordered_by_activated_at(): void
     {
         // Arrange
         DB::table('reference_versions')->insert([
             ['version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
             ['version' => 'v2.0.0', 'activated_at' => '2024-06-01 00:00:00'],
-            ['version' => 'v3.0.0', 'activated_at' => '2099-01-01 00:00:00'],
+            ['version' => 'v3.0.0', 'activated_at' => '2024-12-01 00:00:00'],
         ]);
 
         // Act
-        $version = $this->resolver()->resolve();
+        $rows = $this->resolver()->loadAll();
 
-        // Assert — v3.0.0 is future, v2.0.0 is the latest active
-        $this->assertSame('v2.0.0', $version, 'Should return latest version with activated_at <= now()');
+        // Assert
+        $this->assertCount(3, $rows, 'Should return all 3 rows regardless of activated_at');
+        $this->assertSame('v1.0.0', $rows[0]['version'], 'First row should be earliest activated_at');
+        $this->assertSame('v2.0.0', $rows[1]['version'], 'Second row in order');
+        $this->assertSame('v3.0.0', $rows[2]['version'], 'Third row should be latest activated_at');
     }
 
-    public function test_returns_null_when_table_is_empty(): void
+    public function test_returns_empty_array_when_table_is_empty(): void
     {
         // Arrange — empty table
         // Act
-        $version = $this->resolver()->resolve();
+        $rows = $this->resolver()->loadAll();
 
         // Assert
-        $this->assertNull($version, 'Should return null when no versions exist');
+        $this->assertSame([], $rows, 'Should return empty array when no rows exist');
     }
 
-    public function test_returns_null_when_all_versions_are_future(): void
+    public function test_rows_contain_version_and_activated_at_keys(): void
     {
         // Arrange
         DB::table('reference_versions')->insert([
-            ['version' => 'v1.0.0', 'activated_at' => '2099-01-01 00:00:00'],
+            ['version' => 'v1.0.0', 'activated_at' => '2024-01-01 00:00:00'],
         ]);
 
         // Act
-        $version = $this->resolver()->resolve();
+        $rows = $this->resolver()->loadAll();
 
         // Assert
-        $this->assertNull($version, 'Should return null when all versions are in the future');
-    }
-
-    public function test_returns_single_active_version(): void
-    {
-        // Arrange
-        DB::table('reference_versions')->insert([
-            ['version' => 'v1.0.0', 'activated_at' => '2020-01-01 00:00:00'],
-        ]);
-
-        // Act
-        $version = $this->resolver()->resolve();
-
-        // Assert
-        $this->assertSame('v1.0.0', $version, 'Should return the only active version');
+        $this->assertArrayHasKey('version', $rows[0], 'Each row should have a version key');
+        $this->assertArrayHasKey('activated_at', $rows[0], 'Each row should have an activated_at key');
+        $this->assertSame('v1.0.0', $rows[0]['version'], 'version value should match');
+        $this->assertSame('2024-01-01 00:00:00', $rows[0]['activated_at'], 'activated_at value should match');
     }
 
     public function test_uses_custom_column_names(): void
@@ -117,13 +109,14 @@ class DatabaseVersionResolverTest extends TestCase
         ]);
 
         // Act
-        $version = $this->resolver(
+        $rows = $this->resolver(
             table: 'reference_versions',
             versionColumn: 'version',
             startAtColumn: 'activated_at',
-        )->resolve();
+        )->loadAll();
 
         // Assert
-        $this->assertSame('v5.0.0', $version, 'Should work with explicitly specified column names');
+        $this->assertCount(1, $rows, 'Should return one row');
+        $this->assertSame('v5.0.0', $rows[0]['version'], 'Should work with explicitly specified column names');
     }
 }

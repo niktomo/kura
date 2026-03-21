@@ -3,21 +3,17 @@
 namespace Kura\Version;
 
 use Illuminate\Database\ConnectionInterface;
-use Kura\Contracts\VersionResolverInterface;
+use Kura\Contracts\VersionsLoaderInterface;
 
 /**
- * Resolves the active version from a database table.
+ * Loads all version rows from a database table.
  *
  * Table structure (example: reference_versions):
  *   id           INT PRIMARY KEY
  *   version      VARCHAR  — e.g. "v2.1.0"
  *   activated_at DATETIME — when this version becomes active
- *
- * Resolution rule:
- *   SELECT version FROM {table} WHERE activated_at <= NOW()
- *   ORDER BY activated_at DESC LIMIT 1
  */
-final class DatabaseVersionResolver implements VersionResolverInterface
+final class DatabaseVersionResolver implements VersionsLoaderInterface
 {
     public function __construct(
         private readonly ConnectionInterface $connection,
@@ -26,14 +22,20 @@ final class DatabaseVersionResolver implements VersionResolverInterface
         private readonly string $startAtColumn = 'activated_at',
     ) {}
 
-    public function resolve(): ?string
+    /**
+     * @return list<array{version: string, activated_at: string}>
+     */
+    public function loadAll(): array
     {
-        /** @var object{version: string}|null $row */
-        $row = $this->connection->table($this->table)
-            ->where($this->startAtColumn, '<=', new \DateTimeImmutable)
-            ->orderByDesc($this->startAtColumn)
-            ->first([$this->versionColumn]);
+        /** @var list<object> $rows */
+        $rows = $this->connection->table($this->table)
+            ->orderBy($this->startAtColumn)
+            ->get([$this->versionColumn, $this->startAtColumn])
+            ->all();
 
-        return $row?->{$this->versionColumn};
+        return array_map(fn ($row) => [
+            'version' => (string) $row->{$this->versionColumn},
+            'activated_at' => (string) $row->{$this->startAtColumn},
+        ], $rows);
     }
 }
