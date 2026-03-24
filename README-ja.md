@@ -482,7 +482,7 @@ return [
 |---|---|
 | ホスト | Apple M4 Pro |
 | ランタイム | Docker linux/aarch64 |
-| PHP | 8.4.19 |
+| PHP | 8.4.19（JIT 無効） |
 | APCu | 5.1.28（`apc.shm_size=256M`）|
 | イテレーション数 | シナリオごとに 500 回 |
 | 指標 | p95 レイテンシ |

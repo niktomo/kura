@@ -482,7 +482,7 @@ return [
 |---|---|
 | Host | Apple M4 Pro |
 | Runtime | Docker linux/aarch64 |
-| PHP | 8.4.19 |
+| PHP | 8.4.19 (JIT disabled) |
 | APCu | 5.1.28 (`apc.shm_size=256M`) |
 | Iterations | 500 per scenario |
 | Metric | p95 latency |
