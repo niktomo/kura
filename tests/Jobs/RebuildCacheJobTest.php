@@ -52,7 +52,7 @@ class RebuildCacheJobTest extends TestCase
         $job->handle($manager);
 
         // Assert
-        $ids = $store->getIds('products', 'v1');
+        $ids = $store->getPks('products', 'v1');
         $this->assertIsArray($ids, 'handle() should trigger rebuild and populate cache');
         $this->assertSame(
             [1, 2],
@@ -80,11 +80,11 @@ class RebuildCacheJobTest extends TestCase
 
         // Assert
         $this->assertIsArray(
-            $store->getIds('products', 'v1'),
+            $store->getPks('products', 'v1'),
             'products should be rebuilt',
         );
         $this->assertFalse(
-            $store->getIds('users', 'v1'),
+            $store->getPks('users', 'v1'),
             'users should NOT be rebuilt by a products job',
         );
     }
@@ -117,7 +117,7 @@ class RebuildCacheJobTest extends TestCase
         $job->handle($manager);
 
         // Assert
-        $ids = $store->getIds('products', 'v2.0.0');
+        $ids = $store->getPks('products', 'v2.0.0');
         $this->assertIsArray(
             $ids,
             'handle() should rebuild under the overridden version key',
@@ -144,7 +144,7 @@ class RebuildCacheJobTest extends TestCase
         $job->handle($manager);
 
         // Assert: rebuilt under the loader's default version ('v1')
-        $ids = $store->getIds('products', 'v1');
+        $ids = $store->getPks('products', 'v1');
         $this->assertIsArray(
             $ids,
             'Without version override, records should be cached under loader\'s version',

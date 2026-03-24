@@ -73,6 +73,11 @@ function buildRepository(
         {
             return 'bench';
         }
+
+        public function primaryKey(): string
+        {
+            return 'id';
+        }
     };
 
     $repo = new CacheRepository(

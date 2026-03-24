@@ -9,7 +9,7 @@ use Kura\Store\StoreInterface;
 /**
  * Thin data layer over StoreInterface for a single table.
  *
- * Provides ids(), find(), isLocked(), rebuild().
+ * Provides pks(), find(), isLocked(), rebuild().
  * No auto-reload on cache miss — the caller (CacheProcessor or query layer)
  * decides when to trigger a rebuild.
  */
@@ -53,13 +53,13 @@ class CacheRepository
     }
 
     /**
-     * Return the IDs list from the store, or false if not cached.
+     * Return the primary key list from the store, or false if not cached.
      *
      * @return list<int|string>|false
      */
-    public function ids(): array|false
+    public function pks(): array|false
     {
-        return $this->store->getIds($this->table, $this->version());
+        return $this->store->getPks($this->table, $this->version());
     }
 
     /**
@@ -82,12 +82,12 @@ class CacheRepository
     /**
      * Full rebuild: flush and re-import all records from the loader.
      *
-     * Both record/ids writes (Phase 1) and index writes (Phase 2) are performed
+     * Both record/pks writes (Phase 1) and index writes (Phase 2) are performed
      * inside the lock. This eliminates the Phase-1→Phase-2 window where index
-     * keys are absent while ids is already present, preventing thundering-herd
+     * keys are absent while pks is already present, preventing thundering-herd
      * against the data source during that window.
      *
-     * @param  array{ids?: int, record?: int, index?: int, ids_jitter?: int}  $ttl
+     * @param  array{pks?: int, record?: int, index?: int, pks_jitter?: int}  $ttl
      */
     public function rebuild(array $ttl = [], int $lockTtl = 60): void
     {
@@ -96,15 +96,15 @@ class CacheRepository
         }
 
         $version = $this->version();
-        $idsJitter = $ttl['ids_jitter'] ?? 0;
-        $idsTtl = ($ttl['ids'] ?? 3600) + ($idsJitter > 0 ? random_int(0, $idsJitter) : 0);
+        $idsJitter = $ttl['pks_jitter'] ?? 0;
+        $idsTtl = ($ttl['pks'] ?? 3600) + ($idsJitter > 0 ? random_int(0, $idsJitter) : 0);
         $recordTtl = $ttl['record'] ?? 4800;
-        $indexTtl = $ttl['index'] ?? $idsTtl; // Default: same as ids (including jitter)
+        $indexTtl = $ttl['index'] ?? $idsTtl; // Default: same as pks (including jitter)
 
         try {
             $this->store->flush($this->table, $version);
 
-            // Phase 1: load records + build ids + collect index data
+            // Phase 1: load records + build pks + collect index data
             /** @var list<int|string> $idsList */
             $idsList = [];
             /** @var array<string, array<string|int, list<int|string>>> $indexData col → [value → [ids]] */
@@ -150,7 +150,7 @@ class CacheRepository
                 }
             }
 
-            $this->store->putIds($this->table, $version, $idsList, $idsTtl);
+            $this->store->putPks($this->table, $version, $idsList, $idsTtl);
 
             // Phase 2: build and write indexes (inside lock — eliminates Phase-1→2 window)
             $indexBuilder = new IndexBuilder($this->primaryKey);

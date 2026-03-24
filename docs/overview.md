@@ -80,7 +80,7 @@ src/
 ## APCu Key Structure
 
 ```
-{prefix}:{table}:{version}:ids                     Full ID list [id, ...]
+{prefix}:{table}:{version}:ids                     Full PK list [id, ...]
 {prefix}:{table}:{version}:record:{id}             Single record (associative array)
 {prefix}:{table}:{version}:idx:{col}               Index (one key per column)
 {prefix}:{table}:{version}:cidx:{col1|col2}        Composite index (hashmap)
@@ -94,12 +94,12 @@ It is derived at query time from `LoaderInterface::indexes()`, which is instance
 
 | Key | TTL | Purpose |
 |------|-----|------|
-| `ids` | Short (e.g., 3600s) | Expiration triggers full rebuild |
+| `pks` | Short (e.g., 3600s) | Expiration triggers full rebuild |
 | `record:*` | Long (e.g., 4800s) | Expiration + present in ids → full rebuild |
-| `index` | Same as `ids` (default) | Expiration → `IndexInconsistencyException` → rebuild |
-| `cidx` | Same as `ids` (default) | Expiration → `IndexInconsistencyException` → rebuild |
+| `index` | Same as `pks` (default) | Expiration → `IndexInconsistencyException` → rebuild |
+| `cidx` | Same as `pks` (default) | Expiration → `IndexInconsistencyException` → rebuild |
 
-TTL is configured in `config/kura.php`. `ids` has the shortest TTL (serving as the rebuild trigger). `index` defaults to the same TTL as `ids` (including jitter) so they expire together.
+TTL is configured in `config/kura.php`. `pks` has the shortest TTL (serving as the rebuild trigger). `index` defaults to the same TTL as `pks` (including jitter) so they expire together.
 
 If an index is declared in `LoaderInterface::indexes()` but the APCu key is missing (`IndexInconsistencyException`), Kura triggers a rebuild and falls back to the Loader — the same recovery path as `CacheInconsistencyException`.
 
@@ -155,8 +155,8 @@ RebuildCacheJob (async)
 
 ```
 ReferenceQueryBuilder::get()
-  ├─ ids present → Normal query (index structure from Loader::indexes())
-  ├─ ids missing → Falls back to Loader directly + dispatches rebuild
+  ├─ pks present → Normal query (index structure from Loader::indexes())
+  ├─ pks missing → Falls back to Loader directly + dispatches rebuild
   └─ record missing + present in ids → CacheInconsistencyException → rebuild
 ```
 
@@ -187,7 +187,7 @@ CacheRepository
   ├─ Role: Per-table cache management. Retrieves ids / record & triggers rebuild
   ├─ Dependencies: StoreInterface, LoaderInterface
   └─ Responsibilities:
-       ├─ ids() — Returns false if ids key is missing
+       ├─ pks() — Returns false if pks key is missing
        ├─ find(id) — Retrieves a record
        └─ rebuild() — Iterates through Loader to build entire cache
 

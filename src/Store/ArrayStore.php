@@ -8,7 +8,7 @@ namespace Kura\Store;
 class ArrayStore implements StoreInterface
 {
     /** @var array<string, list<int|string>> */
-    private array $ids = [];
+    private array $pks = [];
 
     /** @var array<string, array<string, array<string, mixed>>> */
     private array $records = [];
@@ -23,20 +23,20 @@ class ArrayStore implements StoreInterface
     private array $locks = [];
 
     // -------------------------------------------------------------------------
-    // IDs
+    // PKs
     // -------------------------------------------------------------------------
 
-    public function getIds(string $table, string $version): array|false
+    public function getPks(string $table, string $version): array|false
     {
-        $key = "{$table}:{$version}:ids";
+        $key = "{$table}:{$version}:pks";
 
-        return $this->ids[$key] ?? false;
+        return $this->pks[$key] ?? false;
     }
 
-    public function putIds(string $table, string $version, array $ids, int $ttl): void
+    public function putPks(string $table, string $version, array $pks, int $ttl): void
     {
-        $key = "{$table}:{$version}:ids";
-        $this->ids[$key] = $ids;
+        $key = "{$table}:{$version}:pks";
+        $this->pks[$key] = $pks;
     }
 
     // -------------------------------------------------------------------------
@@ -136,7 +136,7 @@ class ArrayStore implements StoreInterface
     {
         $prefix = "{$table}:{$version}";
 
-        unset($this->ids["{$prefix}:ids"]);
+        unset($this->pks["{$prefix}:pks"]);
         unset($this->records[$prefix]);
 
         foreach (array_keys($this->indexes) as $key) {

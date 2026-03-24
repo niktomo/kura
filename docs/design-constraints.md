@@ -110,14 +110,14 @@ These behaviours cannot be overridden. They are load-bearing for correctness and
 ### APCu key format
 
 ```
-kura:{prefix}:{table}:{version}:ids
+kura:{prefix}:{table}:{version}:pks
 kura:{prefix}:{table}:{version}:record:{id}
 kura:{prefix}:{table}:{version}:idx:{column}
 kura:{prefix}:{table}:{version}:cidx:{col1|col2}
 kura:{table}:lock
 ```
 
-The `ids` key is the existence signal for a table's cache. Self-healing watches for its absence. Do not write to these keys externally.
+The `pks` key is the existence signal for a table's cache. Self-healing watches for its absence. Do not write to these keys externally.
 
 ### Full-table load (no partial updates)
 
@@ -125,7 +125,7 @@ When a rebuild is triggered, Kura always loads and stores the entire table. Ther
 
 ### Self-healing is always active
 
-When `ids` is missing at query time, Kura automatically triggers a rebuild. This cannot be disabled. If you need to prevent a rebuild (e.g. during a deployment), use the `kura:rebuild` Artisan command to pre-warm before traffic arrives.
+When `pks` is missing at query time, Kura automatically triggers a rebuild. This cannot be disabled. If you need to prevent a rebuild (e.g. during a deployment), use the `kura:rebuild` Artisan command to pre-warm before traffic arrives.
 
 ### Index types: unique, non-unique, composite
 
@@ -165,7 +165,7 @@ All data lives here. The following are stored per table per version:
 
 | Key type | Memory usage |
 |---|---|
-| `ids` | Proportional to record count (hashmap `[id => true]`) |
+| `pks` | Proportional to record count (hashmap `[id => true]`) |
 | `record:{id}` | One entry per record (associative array) |
 | `idx:{column}` | One entry per indexed column (sorted value→ids array) |
 | `cidx:{col1\|col2}` | One entry per composite index (value-pair→ids hashmap) |
@@ -179,7 +179,7 @@ Records are never bulk-loaded into PHP memory. Generator-based traversal fetches
 - Index data for the query's resolved ID set (may be large for unindexed full scans)
 - One record at a time during traversal
 
-**Practical limit**: If the `ids` list or a single index for a table is too large to fit in a single APCu entry, you will see APCu store failures. In that case, consider enabling chunk splitting in your index configuration.
+**Practical limit**: If the `pks` list or a single index for a table is too large to fit in a single APCu entry, you will see APCu store failures. In that case, consider enabling chunk splitting in your index configuration.
 
 ---
 

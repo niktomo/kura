@@ -14,7 +14,7 @@
 
 Load data once from CSV or DB, store it in APCu, and query it with the same fluent API you already know — **no database queries at runtime**. Index-accelerated lookups keep response times sub-millisecond even with large datasets.
 
-Kura provides a QueryBuilder-compatible API backed by APCu (in-process memory), serving reference data entirely without touching the database at query time. Index-based lookups deliver fast filtered queries; generator-based full scans keep per-request memory use low. The design assumes that the ids list and index data for each table fit within APCu's configured shared memory.
+Kura provides a QueryBuilder-compatible API backed by APCu (in-process memory), serving reference data entirely without touching the database at query time. Index-based lookups deliver fast filtered queries; generator-based full scans keep per-request memory use low. The design assumes that the pks list and index data for each table fit within APCu's configured shared memory.
 
 ## Why Kura?
 
@@ -384,7 +384,7 @@ Kura is intentionally narrow in scope. Two operations are central: **QueryBuilde
 |---|---|
 | APCu key format `kura:{table}:{version}:{type}` | Self-healing and invalidation depend on this structure |
 | Full-table load (no partial updates) | Ensures consistency; diff rebuilds are not supported |
-| Self-healing is always active | Triggered automatically on missing `ids` key; cannot be disabled |
+| Self-healing is always active | Triggered automatically on missing `pks` key; cannot be disabled |
 | Index types: unique, non-unique, composite | Declared by the Loader; no runtime registration API |
 | QueryBuilder join / raw / cross-table subquery methods excluded | These have no meaning over in-memory flat data; closure-based condition grouping within a single table is supported |
 
@@ -401,12 +401,12 @@ return [
 
     // TTL in seconds per cache type
     'ttl' => [
-        'ids'        => 3600,   // rebuild trigger — expiry causes next query to rebuild
+        'pks'        => 3600,   // rebuild trigger — expiry causes next query to rebuild
         'record'     => 4800,   // longer than ids so records survive across rebuilds
         // 'index'   => omit to match ids TTL including jitter (recommended)
         //              ids and indexes then expire together, preventing a window where
         //              index keys are missing while ids is still present
-        'ids_jitter' => 600,    // random 0–N seconds added to ids and index TTL (thundering herd prevention)
+        'pks_jitter' => 600,    // random 0–N seconds added to ids and index TTL (thundering herd prevention)
     ],
 
     // Rebuild lock TTL (seconds). Set to 1.5–2× the expected Loader execution time.

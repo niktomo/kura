@@ -75,11 +75,11 @@ class RebuildCommandTest extends TestCase
 
         // Then: both tables should be cached
         $this->assertIsArray(
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'users cache should be populated after rebuild',
         );
         $this->assertIsArray(
-            $this->store->getIds('products', 'v1'),
+            $this->store->getPks('products', 'v1'),
             'products cache should be populated after rebuild',
         );
     }
@@ -106,11 +106,11 @@ class RebuildCommandTest extends TestCase
 
         // Then: only users should be cached
         $this->assertIsArray(
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'users cache should be populated',
         );
         $this->assertFalse(
-            $this->store->getIds('products', 'v1'),
+            $this->store->getPks('products', 'v1'),
             'products cache should NOT be populated when not specified',
         );
     }
@@ -136,11 +136,11 @@ class RebuildCommandTest extends TestCase
 
         // Then: cache should be stored under v2.0.0, not v1
         $this->assertIsArray(
-            $this->store->getIds('users', 'v2.0.0'),
+            $this->store->getPks('users', 'v2.0.0'),
             'rebuild should use the overridden version for cache keys',
         );
         $this->assertFalse(
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'rebuild should NOT store under the original Loader version',
         );
     }

@@ -20,8 +20,8 @@ class ApcuStoreKeyTest extends TestCase
     public function test_ids_key(): void
     {
         $this->assertSame(
-            'kura:users:v1:ids',
-            $this->store->idsKey('users', 'v1'),
+            'kura:users:v1:pks',
+            $this->store->pksKey('users', 'v1'),
             'ids key should include prefix, table, and version',
         );
     }

@@ -135,25 +135,25 @@ trait ExecutesQueries
             return $record;
         }
 
-        // Cache miss — check if ids exist to decide recovery strategy
-        $ids = $this->repository->ids();
+        // Cache miss — check if pks exist to decide recovery strategy
+        $pks = $this->repository->pks();
 
-        if ($ids === false) {
+        if ($pks === false) {
             // No cache at all — rebuild and retry
             $this->processor->dispatchRebuild();
 
             return $this->repository->find($id);
         }
 
-        // ids exist but record missing
-        if (isset($ids[$id])) {
+        // pks exist but record missing
+        if (isset($pks[$id])) {
             // Record should exist — inconsistency, rebuild
             $this->processor->dispatchRebuild();
 
             return $this->repository->find($id);
         }
 
-        // Not in ids — genuinely doesn't exist
+        // Not in pks — genuinely doesn't exist
         return null;
     }
 

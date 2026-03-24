@@ -23,7 +23,7 @@ class ArrayStoreTest extends TestCase
     public function test_get_ids_returns_false_when_not_stored(): void
     {
         $this->assertFalse(
-            $this->store->getIds('users', $this->version),
+            $this->store->getPks('users', $this->version),
             'getIds should return false when no ids have been stored for the table',
         );
     }
@@ -31,28 +31,28 @@ class ArrayStoreTest extends TestCase
     public function test_get_ids_returns_stored_ids(): void
     {
         $ids = [1, 2, 3];
-        $this->store->putIds('users', $this->version, $ids, 3600);
+        $this->store->putPks('users', $this->version, $ids, 3600);
 
         $this->assertSame(
             $ids,
-            $this->store->getIds('users', $this->version),
+            $this->store->getPks('users', $this->version),
             'getIds should return the exact ids list that was stored',
         );
     }
 
     public function test_ids_are_isolated_per_table(): void
     {
-        $this->store->putIds('users', $this->version, [1, 2], 3600);
-        $this->store->putIds('products', $this->version, [10, 20], 3600);
+        $this->store->putPks('users', $this->version, [1, 2], 3600);
+        $this->store->putPks('products', $this->version, [10, 20], 3600);
 
         $this->assertSame(
             [1, 2],
-            $this->store->getIds('users', $this->version),
+            $this->store->getPks('users', $this->version),
             'Users table ids should be isolated from products',
         );
         $this->assertSame(
             [10, 20],
-            $this->store->getIds('products', $this->version),
+            $this->store->getPks('products', $this->version),
             'Products table ids should be isolated from users',
         );
     }
@@ -183,7 +183,7 @@ class ArrayStoreTest extends TestCase
 
     public function test_flush_removes_all_data_for_table_and_version(): void
     {
-        $this->store->putIds('users', $this->version, [1, 2], 3600);
+        $this->store->putPks('users', $this->version, [1, 2], 3600);
         $this->store->putRecord('users', $this->version, 1, ['id' => 1], 3600);
         /** @var list<array{mixed, list<int|string>}> $entries */
         $entries = [['active', [1]]];
@@ -192,7 +192,7 @@ class ArrayStoreTest extends TestCase
         $this->store->flush('users', $this->version);
 
         $this->assertFalse(
-            $this->store->getIds('users', $this->version),
+            $this->store->getPks('users', $this->version),
             'Ids should be removed after flush',
         );
         $this->assertFalse(
@@ -207,32 +207,32 @@ class ArrayStoreTest extends TestCase
 
     public function test_flush_does_not_affect_other_tables(): void
     {
-        $this->store->putIds('users', $this->version, [1], 3600);
-        $this->store->putIds('products', $this->version, [10], 3600);
+        $this->store->putPks('users', $this->version, [1], 3600);
+        $this->store->putPks('products', $this->version, [10], 3600);
 
         $this->store->flush('users', $this->version);
 
         $this->assertSame(
             [10],
-            $this->store->getIds('products', $this->version),
+            $this->store->getPks('products', $this->version),
             'Flushing users should not affect products',
         );
     }
 
     public function test_flush_does_not_affect_other_versions(): void
     {
-        $this->store->putIds('users', 'v1', [1], 3600);
-        $this->store->putIds('users', 'v2', [2], 3600);
+        $this->store->putPks('users', 'v1', [1], 3600);
+        $this->store->putPks('users', 'v2', [2], 3600);
 
         $this->store->flush('users', 'v1');
 
         $this->assertFalse(
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'v1 ids should be removed after flush',
         );
         $this->assertSame(
             [2],
-            $this->store->getIds('users', 'v2'),
+            $this->store->getPks('users', 'v2'),
             'v2 ids should not be affected by flushing v1',
         );
     }

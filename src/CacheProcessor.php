@@ -78,10 +78,10 @@ class CacheProcessor
             return;
         }
 
-        $ids = $this->repository->ids();
+        $pks = $this->repository->pks();
 
-        // ids なし → rebuild dispatch + Loader 直撃
-        if ($ids === false) {
+        // pks なし → rebuild dispatch + Loader 直撃
+        if ($pks === false) {
             $this->dispatchRebuild();
             yield from $this->cursorFromLoader($wheres, $orders, $limit, $offset, $randomOrder);
 
@@ -91,8 +91,8 @@ class CacheProcessor
         // Derive index structure from Loader (instance-cached per processor)
         [$indexedColumns, $compositeNames] = $this->resolveIndexDefs();
 
-        // 候補 IDs の解決
-        $candidateIds = $ids;
+        // 候補 PKs の解決
+        $candidatePks = $pks;
 
         if ($indexedColumns !== [] || $compositeNames !== []) {
             $resolver = new IndexResolver(
@@ -105,20 +105,20 @@ class CacheProcessor
             $resolved = $resolver->resolveIds($wheres);
 
             if ($resolved !== null) {
-                $candidateIds = $resolved;
+                $candidatePks = $resolved;
             }
         }
 
         // Record 欠損チェック用に hashmap を作成（array_flip で O(1) lookup）
-        /** @var array<int|string, true> $idsMap */
-        $idsMap = array_fill_keys($ids, true);
+        /** @var array<int|string, true> $pksMap */
+        $pksMap = array_fill_keys($pks, true);
 
         // Single-column indexed orderBy → walk pre-sorted index directly (skip PHP sort)
         if (! $randomOrder && count($orders) === 1 && isset($indexedColumns[$orders[0]['column']])) {
             yield from $this->cursorFromCacheIndexWalked(
-                candidateIds: $candidateIds,
-                ids: $ids,
-                idsMap: $idsMap,
+                candidatePks: $candidatePks,
+                pks: $pks,
+                pksMap: $pksMap,
                 wheres: $wheres,
                 order: $orders[0],
                 limit: $limit,
@@ -129,7 +129,7 @@ class CacheProcessor
         }
 
         // RecordCursor でフィルタ + ソート + ページネーション
-        yield from $this->cursorFromCache($candidateIds, $idsMap, $wheres, $orders, $limit, $offset, $randomOrder);
+        yield from $this->cursorFromCache($candidatePks, $pksMap, $wheres, $orders, $limit, $offset, $randomOrder);
     }
 
     /**
@@ -162,8 +162,8 @@ class CacheProcessor
     // -------------------------------------------------------------------------
 
     /**
-     * @param  list<int|string>  $candidateIds
-     * @param  array<int|string, true>  $idsMap
+     * @param  list<int|string>  $candidatePks
+     * @param  array<int|string, true>  $pksMap
      * @param  list<array<string, mixed>>  $wheres
      * @param  list<array{column: string, direction: string}>  $orders
      * @return \Generator<int, array<string, mixed>>
@@ -171,8 +171,8 @@ class CacheProcessor
      * @throws CacheInconsistencyException
      */
     private function cursorFromCache(
-        array $candidateIds,
-        array $idsMap,
+        array $candidatePks,
+        array $pksMap,
         array $wheres,
         array $orders,
         ?int $limit,
@@ -180,9 +180,9 @@ class CacheProcessor
         bool $randomOrder,
     ): \Generator {
         // Sorted/random queries need all records upfront — delegate to RecordCursor
-        // with inconsistency check integrated into the ID validation pass.
+        // with inconsistency check integrated into the PK validation pass.
         if ($orders !== [] || $randomOrder) {
-            yield from $this->cursorFromCacheSorted($candidateIds, $idsMap, $wheres, $orders, $limit, $offset, $randomOrder);
+            yield from $this->cursorFromCacheSorted($candidatePks, $pksMap, $wheres, $orders, $limit, $offset, $randomOrder);
 
             return;
         }
@@ -192,19 +192,19 @@ class CacheProcessor
         $skipped = 0;
         $yielded = 0;
 
-        foreach ($candidateIds as $id) {
+        foreach ($candidatePks as $pk) {
             if ($limit !== null && $yielded >= $limit) {
                 return;
             }
 
-            $record = $this->repository->find($id);
+            $record = $this->repository->find($pk);
 
             if ($record === null) {
-                if (isset($idsMap[$id])) {
+                if (isset($pksMap[$pk])) {
                     throw new CacheInconsistencyException(
-                        "Record {$id} missing from cache but present in ids for table {$this->repository->table()}",
+                        "Record {$pk} missing from cache but present in pks for table {$this->repository->table()}",
                         table: $this->repository->table(),
-                        recordId: $id,
+                        recordId: $pk,
                     );
                 }
 
@@ -229,8 +229,8 @@ class CacheProcessor
     /**
      * Cache cursor for sorted/random queries — must collect all matching records.
      *
-     * @param  list<int|string>  $candidateIds
-     * @param  array<int|string, true>  $idsMap
+     * @param  list<int|string>  $candidatePks
+     * @param  array<int|string, true>  $pksMap
      * @param  list<array<string, mixed>>  $wheres
      * @param  list<array{column: string, direction: string}>  $orders
      * @return \Generator<int, array<string, mixed>>
@@ -238,8 +238,8 @@ class CacheProcessor
      * @throws CacheInconsistencyException
      */
     private function cursorFromCacheSorted(
-        array $candidateIds,
-        array $idsMap,
+        array $candidatePks,
+        array $pksMap,
         array $wheres,
         array $orders,
         ?int $limit,
@@ -247,14 +247,14 @@ class CacheProcessor
         bool $randomOrder,
     ): \Generator {
         yield from (new RecordCursor(
-            ids: $candidateIds,
+            pks: $candidatePks,
             repository: $this->repository,
             wheres: $wheres,
             orders: $orders,
             limit: $limit,
             offset: $offset,
             randomOrder: $randomOrder,
-            idsMap: $idsMap,
+            pksMap: $pksMap,
         ))->generate();
     }
 
@@ -265,9 +265,9 @@ class CacheProcessor
      * Offset and limit are applied by skipping/stopping during traversal,
      * giving O(offset + limit) performance instead of O(N log N).
      *
-     * @param  list<int|string>  $candidateIds
-     * @param  list<int|string>  $ids
-     * @param  array<int|string, true>  $idsMap
+     * @param  list<int|string>  $candidatePks
+     * @param  list<int|string>  $pks
+     * @param  array<int|string, true>  $pksMap
      * @param  list<array<string, mixed>>  $wheres
      * @param  array{column: string, direction: string}  $order
      * @return \Generator<int, array<string, mixed>>
@@ -275,9 +275,9 @@ class CacheProcessor
      * @throws CacheInconsistencyException
      */
     private function cursorFromCacheIndexWalked(
-        array $candidateIds,
-        array $ids,
-        array $idsMap,
+        array $candidatePks,
+        array $pks,
+        array $pksMap,
         array $wheres,
         array $order,
         ?int $limit,
@@ -288,33 +288,33 @@ class CacheProcessor
         $column = $order['column'];
         $desc = $order['direction'] === 'desc';
 
-        // Build candidate map for O(1) membership check (only when IDs were narrowed)
+        // Build candidate map for O(1) membership check (only when PKs were narrowed)
         /** @var array<int|string, true>|null $candidateMap */
-        $candidateMap = count($candidateIds) < count($ids)
-            ? array_fill_keys($candidateIds, true)
+        $candidateMap = count($candidatePks) < count($pks)
+            ? array_fill_keys($candidatePks, true)
             : null;
 
         $skipped = 0;
         $yielded = 0;
 
         foreach ($this->walkIndex($table, $version, $column, $desc) as [, $entryIds]) {
-            foreach ($entryIds as $id) {
+            foreach ($entryIds as $pk) {
                 if ($limit !== null && $yielded >= $limit) {
                     return;
                 }
 
-                if ($candidateMap !== null && ! isset($candidateMap[$id])) {
+                if ($candidateMap !== null && ! isset($candidateMap[$pk])) {
                     continue;
                 }
 
-                $record = $this->repository->find($id);
+                $record = $this->repository->find($pk);
 
                 if ($record === null) {
-                    if (isset($idsMap[$id])) {
+                    if (isset($pksMap[$pk])) {
                         throw new CacheInconsistencyException(
-                            "Record {$id} missing from cache but present in ids for table {$table}",
+                            "Record {$pk} missing from cache but present in pks for table {$table}",
                             table: $table,
-                            recordId: $id,
+                            recordId: $pk,
                         );
                     }
 
@@ -397,7 +397,7 @@ class CacheProcessor
         );
 
         yield from (new RecordCursor(
-            ids: $tempIds,
+            pks: $tempIds,
             repository: $tempRepository,
             wheres: $wheres,
             orders: $orders,

@@ -16,15 +16,15 @@ return [
      * index defaults to ids TTL (including jitter) when omitted, so they expire together.
      * meta and record are longer to survive across rebuilds.
      *
-     * ids_jitter: random 0–N seconds added to both ids and index TTL to prevent thundering herd.
+     * pks_jitter: random 0–N seconds added to both ids and index TTL to prevent thundering herd.
      */
     'ttl' => [
-        'ids' => 3600,
+        'pks' => 3600,
         'record' => 4800,
         // 'index' — omit to match ids TTL including jitter (recommended)
         //           ids and indexes then expire together, preventing a window where
         //           index keys are missing while ids is still present
-        'ids_jitter' => 600,  // applied to both ids and index TTL
+        'pks_jitter' => 600,  // applied to both ids and index TTL
     ],
 
     /*

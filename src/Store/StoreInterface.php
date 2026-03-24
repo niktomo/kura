@@ -4,13 +4,13 @@ namespace Kura\Store;
 
 interface StoreInterface
 {
-    // ids
+    // pks
 
     /** @return list<int|string>|false */
-    public function getIds(string $table, string $version): array|false;
+    public function getPks(string $table, string $version): array|false;
 
-    /** @param list<int|string> $ids */
-    public function putIds(string $table, string $version, array $ids, int $ttl): void;
+    /** @param list<int|string> $pks */
+    public function putPks(string $table, string $version, array $pks, int $ttl): void;
 
     // record
 

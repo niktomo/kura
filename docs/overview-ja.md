@@ -80,7 +80,7 @@ src/
 ## APCu キー構造
 
 ```
-{prefix}:{table}:{version}:ids                     全 ID リスト [id, ...]
+{prefix}:{table}:{version}:ids                     全 PK リスト [id, ...]
 {prefix}:{table}:{version}:record:{id}             1 レコード（連想配列）
 {prefix}:{table}:{version}:idx:{col}               index（カラムごとに単一キー）
 {prefix}:{table}:{version}:cidx:{col1|col2}        composite index（hashmap）
@@ -94,12 +94,12 @@ src/
 
 | キー | TTL | 役割 |
 |------|-----|------|
-| `ids` | 短い（例: 3600秒） | 失効 → 全再構築トリガー |
-| `record:*` | 長い（例: 4800秒） | 失効 → ids にある → 全再構築 |
+| `pks` | 短い（例: 3600秒） | 失効 → 全再構築トリガー |
+| `record:*` | 長い（例: 4800秒） | 失効 → pks にある → 全再構築 |
 | `index` | ids と同じ（デフォルト） | 失効 → `IndexInconsistencyException` → 再構築 |
 | `cidx` | ids と同じ（デフォルト） | 失効 → `IndexInconsistencyException` → 再構築 |
 
-TTL は `config/kura.php` で設定。`ids` が最短（再構築トリガーの役割）。`index` はデフォルトで `ids` と同じ TTL（jitter 込み）になるよう設計されており、同タイミングで失効する。
+TTL は `config/kura.php` で設定。`pks` が最短（再構築トリガーの役割）。`index` はデフォルトで `pks` と同じ TTL（jitter 込み）になるよう設計されており、同タイミングで失効する。
 
 `LoaderInterface::indexes()` で宣言済みのインデックスに対して APCu キーが欠損している場合（`IndexInconsistencyException`）は、`CacheInconsistencyException` と同じ回復パス（rebuild + Loader フォールバック）を辿る。
 
@@ -155,9 +155,9 @@ RebuildCacheJob（非同期）
 
 ```
 ReferenceQueryBuilder::get()
-  ├─ ids あり → 通常クエリ（Loader::indexes() からインデックス構造を取得）
-  ├─ ids なし → Loader 直撃 + rebuild dispatch
-  └─ record 欠損 + ids にある → CacheInconsistencyException → rebuild
+  ├─ pks あり → 通常クエリ（Loader::indexes() からインデックス構造を取得）
+  ├─ pks なし → Loader 直撃 + rebuild dispatch
+  └─ record 欠損 + pks にある → CacheInconsistencyException → rebuild
 ```
 
 ---
@@ -187,7 +187,7 @@ CacheRepository
   ├─ 役割: テーブル単位のキャッシュ管理。ids / record の取得・rebuild
   ├─ 依存: StoreInterface, LoaderInterface
   └─ 責務:
-       ├─ ids() — ids キーがなければ false
+       ├─ pks() — pks キーがなければ false
        ├─ find(id) — record 取得
        └─ rebuild() — Loader を回して全キャッシュ構築
 

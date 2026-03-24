@@ -70,11 +70,11 @@ class KuraServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(KuraManager::class, function ($app) {
-            /** @var array{ids?: int, record?: int, index?: int, ids_jitter?: int} $ttl */
+            /** @var array{pks?: int, record?: int, index?: int, pks_jitter?: int} $ttl */
             $ttl = $app['config']->get('kura.ttl', []);
             /** @var int $lockTtl */
             $lockTtl = $app['config']->get('kura.lock_ttl', 60);
-            /** @var array<string, array{ttl?: array{ids?: int, record?: int, index?: int, ids_jitter?: int}}> $tableConfigs */
+            /** @var array<string, array{ttl?: array{pks?: int, record?: int, index?: int, pks_jitter?: int}}> $tableConfigs */
             $tableConfigs = $app['config']->get('kura.tables', []);
 
             return new KuraManager(

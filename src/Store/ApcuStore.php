@@ -12,9 +12,9 @@ class ApcuStore implements StoreInterface
     // Key builders (public for testing)
     // -------------------------------------------------------------------------
 
-    public function idsKey(string $table, string $version): string
+    public function pksKey(string $table, string $version): string
     {
-        return "{$this->prefix}:{$table}:{$version}:ids";
+        return "{$this->prefix}:{$table}:{$version}:pks";
     }
 
     public function recordKey(string $table, string $version, int|string $id): string
@@ -38,17 +38,17 @@ class ApcuStore implements StoreInterface
     }
 
     // -------------------------------------------------------------------------
-    // StoreInterface — IDs
+    // StoreInterface — PKs
     // -------------------------------------------------------------------------
 
-    public function getIds(string $table, string $version): array|false
+    public function getPks(string $table, string $version): array|false
     {
-        return apcu_fetch($this->idsKey($table, $version));
+        return apcu_fetch($this->pksKey($table, $version));
     }
 
-    public function putIds(string $table, string $version, array $ids, int $ttl): void
+    public function putPks(string $table, string $version, array $pks, int $ttl): void
     {
-        apcu_store($this->idsKey($table, $version), $ids, $ttl);
+        apcu_store($this->pksKey($table, $version), $pks, $ttl);
     }
 
     // -------------------------------------------------------------------------

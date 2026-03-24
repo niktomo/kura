@@ -26,8 +26,8 @@ class KuraManager
     private ?string $versionOverride = null;
 
     /**
-     * @param  array{ids?: int, record?: int, index?: int, ids_jitter?: int}  $defaultTtl
-     * @param  array<string, array{ttl?: array{ids?: int, record?: int, index?: int, ids_jitter?: int}}>  $tableConfigs
+     * @param  array{pks?: int, record?: int, index?: int, pks_jitter?: int}  $defaultTtl
+     * @param  array<string, array{ttl?: array{pks?: int, record?: int, index?: int, pks_jitter?: int}}>  $tableConfigs
      */
     public function __construct(
         private readonly StoreInterface $store,
@@ -137,7 +137,7 @@ class KuraManager
     {
         $tableConfig = $this->tableConfigs[$table] ?? [];
 
-        /** @var array{ids?: int, record?: int, index?: int, ids_jitter?: int} $ttl */
+        /** @var array{pks?: int, record?: int, index?: int, pks_jitter?: int} $ttl */
         $ttl = array_merge($this->defaultTtl, $tableConfig['ttl'] ?? []);
 
         $this->repository($table)->rebuild(

@@ -85,20 +85,20 @@ class CacheRepositoryTest extends TestCase
         ]);
 
         $this->assertFalse(
-            $repo->ids(),
+            $repo->pks(),
             'ids() should return false when ids are not yet cached (no auto-reload)',
         );
     }
 
     public function test_ids_returns_cached_ids_list(): void
     {
-        $this->store->putIds('users', 'v1', [1, 2, 3], 3600);
+        $this->store->putPks('users', 'v1', [1, 2, 3], 3600);
 
         $repo = $this->makeRepository([]);
 
         $this->assertSame(
             [1, 2, 3],
-            $repo->ids(),
+            $repo->pks(),
             'ids() should return the list stored in the cache',
         );
     }
@@ -192,14 +192,14 @@ class CacheRepositoryTest extends TestCase
 
         $this->assertSame(
             [1, 2],
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'rebuild should store ids as a list [id, ...]',
         );
     }
 
     public function test_rebuild_flushes_stale_data_before_loading(): void
     {
-        $this->store->putIds('users', 'v1', [99], 3600);
+        $this->store->putPks('users', 'v1', [99], 3600);
         $this->store->putRecord('users', 'v1', 99, ['id' => 99, 'name' => 'Stale'], 3600);
 
         $repo = $this->makeRepository([
@@ -214,7 +214,7 @@ class CacheRepositoryTest extends TestCase
         );
         $this->assertSame(
             [1],
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'Only current records should remain after rebuild',
         );
     }
@@ -307,7 +307,7 @@ class CacheRepositoryTest extends TestCase
 
         // Data should be present
         $this->assertIsArray(
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'ids should be stored after rebuild',
         );
     }
@@ -324,7 +324,7 @@ class CacheRepositoryTest extends TestCase
 
         // Should NOT have rebuilt — ids should still be missing
         $this->assertFalse(
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'rebuild should skip when lock is already held by another process',
         );
     }
@@ -447,7 +447,7 @@ class CacheRepositoryTest extends TestCase
 
         $this->assertSame(
             [1],
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'reload() should delegate to rebuild() and populate the cache',
         );
     }
@@ -465,7 +465,7 @@ class CacheRepositoryTest extends TestCase
         $repo->rebuild();
 
         // Assert — ids key exists and is empty array (not false)
-        $ids = $this->store->getIds('users', 'v1');
+        $ids = $this->store->getPks('users', 'v1');
         $this->assertSame(
             [],
             $ids,
@@ -479,12 +479,12 @@ class CacheRepositoryTest extends TestCase
         $repo = $this->makeRepository([]);
 
         // Act — before rebuild, ids() returns false
-        $before = $repo->ids();
+        $before = $repo->pks();
 
         $repo->rebuild();
 
         // After rebuild with zero records, ids() returns []
-        $after = $repo->ids();
+        $after = $repo->pks();
 
         // Assert
         $this->assertFalse(
@@ -510,7 +510,7 @@ class CacheRepositoryTest extends TestCase
         $repo->rebuild();
 
         // Act — ids() after rebuild
-        $ids = $repo->ids();
+        $ids = $repo->pks();
 
         // Assert — ids is [] not false, so CacheProcessor would NOT dispatch a rebuild
         $this->assertIsArray(

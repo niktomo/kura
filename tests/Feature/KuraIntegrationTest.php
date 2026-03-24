@@ -38,7 +38,7 @@ class KuraIntegrationTest extends TestCase
 
         $app['config']->set('kura.prefix', 'test');
         $app['config']->set('kura.ttl', [
-            'ids' => 3600,
+            'pks' => 3600,
             'meta' => 4800,
             'record' => 4800,
             'index' => 4800,
@@ -126,7 +126,7 @@ class KuraIntegrationTest extends TestCase
         // Given the ServiceProvider is loaded
         // Then kura config should be available
         $this->assertSame('test', config('kura.prefix'));
-        $this->assertSame(3600, config('kura.ttl.ids'));
+        $this->assertSame(3600, config('kura.ttl.pks'));
     }
 
     // =========================================================================

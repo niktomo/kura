@@ -211,7 +211,7 @@ class CacheProcessorTest extends TestCase
         $this->assertCount(3, $results, 'Should return records from Loader when ids are missing');
 
         // And cache should be rebuilt
-        $ids = $this->store->getIds('products', 'v1');
+        $ids = $this->store->getPks('products', 'v1');
         $this->assertIsArray($ids, 'Cache should be rebuilt after ids-missing fallback');
     }
 
@@ -222,7 +222,7 @@ class CacheProcessorTest extends TestCase
     public function test_cursor_throws_on_record_inconsistency(): void
     {
         // Given ids claim record 1 exists, but record 1 is missing from store
-        $this->store->putIds('products', 'v1', [1, 2], 3600);
+        $this->store->putPks('products', 'v1', [1, 2], 3600);
         // Only store record 2, not record 1
         $this->store->putRecord('products', 'v1', 2, $this->records[1], 3600);
 
@@ -247,7 +247,7 @@ class CacheProcessorTest extends TestCase
     public function test_select_catches_inconsistency_and_falls_back_to_loader(): void
     {
         // Given record inconsistency
-        $this->store->putIds('products', 'v1', [1, 2], 3600);
+        $this->store->putPks('products', 'v1', [1, 2], 3600);
         $this->store->putRecord('products', 'v1', 2, $this->records[1], 3600);
 
         $processor = $this->makeProcessor();

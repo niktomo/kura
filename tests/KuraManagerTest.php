@@ -237,7 +237,7 @@ class KuraManagerTest extends TestCase
         $this->manager->rebuild('users');
 
         // Assert
-        $ids = $this->store->getIds('users', 'v1');
+        $ids = $this->store->getPks('users', 'v1');
         $this->assertIsArray($ids, 'rebuild should store ids in the cache');
         $this->assertSame(
             [1, 2],
@@ -259,11 +259,11 @@ class KuraManagerTest extends TestCase
 
         // Assert
         $this->assertIsArray(
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'rebuildAll should populate users cache',
         );
         $this->assertIsArray(
-            $this->store->getIds('products', 'v1'),
+            $this->store->getPks('products', 'v1'),
             'rebuildAll should populate products cache',
         );
     }
@@ -357,7 +357,7 @@ class KuraManagerTest extends TestCase
         // Arrange: per-table config with custom record TTL
         $manager = new KuraManager(
             store: $this->store,
-            defaultTtl: ['ids' => 100, 'record' => 200],
+            defaultTtl: ['pks' => 100, 'record' => 200],
             tableConfigs: [
                 'products' => ['ttl' => ['record' => 9999]],
             ],
@@ -373,7 +373,7 @@ class KuraManagerTest extends TestCase
 
         // Assert: records should be stored (we can't easily verify TTL on ArrayStore,
         // but we verify the rebuild completed successfully with the merged config)
-        $ids = $this->store->getIds('products', 'v1');
+        $ids = $this->store->getPks('products', 'v1');
         $this->assertIsArray($ids, 'Per-table config rebuild should store ids');
         $this->assertSame([1], $ids, 'Per-table config rebuild should store correct ids');
     }
@@ -430,11 +430,11 @@ class KuraManagerTest extends TestCase
 
         // Assert — ids stored under overridden version key
         $this->assertIsArray(
-            $this->store->getIds('users', 'v3.0.0'),
+            $this->store->getPks('users', 'v3.0.0'),
             'rebuild should use overridden version for APCu keys',
         );
         $this->assertFalse(
-            $this->store->getIds('users', 'v1'),
+            $this->store->getPks('users', 'v1'),
             'rebuild should NOT store under the original Loader version',
         );
     }
