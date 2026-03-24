@@ -24,7 +24,7 @@ Kura は APCu（インプロセスメモリ）をバックエンドとする Que
 - **スマートインデックス** — 二分探索インデックスで範囲クエリ対応、composite index hashmap で O(1) 複合カラム検索、大規模データセット向けの自動チャンク分割
 - **Self-Healing** — キャッシュが消えても自動再構築 — アプリケーションからは常に完全なデータが見える
 - **バージョン管理** — DB や CSV でリファレンスデータのバージョンをシームレスに切り替え
-- **データソースの差し替え自由** — `LoaderInterface` を実装するだけで CSV・Eloquent・QueryBuilder・REST API・S3 など任意のバックエンドに対応。組み込み Loader を使うか、4メソッドで自作して差し替えできる
+- **データソースの差し替え自由** — `LoaderInterface` を実装するだけで CSV・Eloquent・QueryBuilder・REST API・S3 など任意のバックエンドに対応。組み込み Loader を使うか、5メソッドで自作して差し替えできる
 
 ## 要件
 
@@ -166,17 +166,18 @@ $loader = new EloquentLoader(
 
 #### パターン C: 自作 Loader
 
-どんなデータソースでも対応可能 — `LoaderInterface` の4メソッドを実装するだけ:
+どんなデータソースでも対応可能 — `LoaderInterface` の5メソッドを実装するだけ:
 
 ```php
 use Kura\Loader\LoaderInterface;
 
 class MyApiLoader implements LoaderInterface
 {
-    public function load(): \Generator { /* レコードを fetch して yield */ }
-    public function columns(): array   { /* カラム名 → 型のマップ */ }
-    public function indexes(): array   { /* インデックス定義 */ }
-    public function version(): string  { /* キャッシュキーの識別子 */ }
+    public function load(): \Generator   { /* レコードを fetch して yield */ }
+    public function columns(): array     { /* カラム名 → 型のマップ */ }
+    public function indexes(): array     { /* インデックス定義 */ }
+    public function primaryKey(): string { /* 主キーのカラム名 */ }
+    public function version(): string    { /* キャッシュキーの識別子 */ }
 }
 ```
 
@@ -223,25 +224,25 @@ storage/reference/
 `AppServiceProvider`（または専用のサービスプロバイダ）で:
 
 ```php
+use Kura\Contracts\VersionResolverInterface;
 use Kura\Facades\Kura;
 use Kura\Loader\CsvLoader;
-use Kura\Loader\CsvVersionResolver;
 
 public function boot(): void
 {
-    // CSV の例
-    $resolver = new CsvVersionResolver(base_path('data/versions.csv'));
+    // コンテナにバインドされた resolver を使用（config/kura.php で設定）
+    $resolver = app(VersionResolverInterface::class);
 
     Kura::register('stations', new CsvLoader(
         tableDirectory: base_path('data/stations'),
         resolver: $resolver,
-    ), primaryKey: 'id');
+    ));
 
     // 複数テーブルの登録も可能
     Kura::register('lines', new CsvLoader(
         tableDirectory: base_path('data/lines'),
         resolver: $resolver,
-    ), primaryKey: 'id');
+    ));
 }
 ```
 
@@ -307,7 +308,7 @@ $stations = Kura::table('stations')
 ### APCu キー構造
 
 ```
-kura:stations:v1.0.0:ids                    # 全 PK リスト
+kura:stations:v1.0.0:pks                    # 全 PK リスト
 kura:stations:v1.0.0:record:1               # 1レコード
 kura:stations:v1.0.0:idx:prefecture         # 検索インデックス（単カラム）
 kura:stations:v1.0.0:cidx:prefecture|city   # composite index（O(1) 複合カラム検索）
@@ -368,7 +369,7 @@ Kura のスコープは意図的に絞られています。中心となる操作
 
 | 拡張ポイント | 方法 |
 |---|---|
-| データソース | `LoaderInterface` を実装（`load`, `columns`, `indexes`, `version` の4メソッド） |
+| データソース | `LoaderInterface` を実装（`load`, `columns`, `indexes`, `primaryKey`, `version` の5メソッド） |
 | バージョン解決 | サービスコンテナで `VersionResolverInterface` を bind し直す |
 | Rebuild のディスパッチ | `strategy: callback` に `\Closure(\Kura\CacheRepository): void` を設定 |
 | テーブル単位の TTL | `config/kura.php` の `tables` セクション |

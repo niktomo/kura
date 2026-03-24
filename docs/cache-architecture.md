@@ -33,7 +33,7 @@ ReferenceQueryBuilderInterface extends BuilderContract
             │  compilePredicate() — converts where conditions to closures
             │
             ├─ CacheRepository
-            │    │  find(), ids(), reload()
+            │    │  find(), pks(), reload()
             │    │  APCu read/write + Self-Healing
             │    │
             │    ├─ StoreInterface (APCu abstraction)
@@ -56,7 +56,7 @@ ReferenceQueryBuilderInterface extends BuilderContract
   Grammar and Connection are not needed
 - **QueryBuilder is state-only**: Holds where/order/limit state; execution is delegated to `CacheProcessor`.
   Index resolution, record traversal, and condition evaluation are all Processor responsibilities
-- **LoaderInterface is defined in Kura**: Has `load()`, `columns()`, `indexes()`.
+- **LoaderInterface is defined in Kura**: Has `load()`, `columns()`, `indexes()`, `primaryKey()`, `version()`.
   `CsvLoader`, `EloquentLoader`, and `QueryBuilderLoader` are included in `src/Loader/`
 
 ### LoaderInterface
@@ -88,6 +88,11 @@ interface LoaderInterface
      *   → single-column indexes for each column are also created automatically
      */
     public function indexes(): array;
+
+    /**
+     * Primary key column name.
+     */
+    public function primaryKey(): string;
 
     /**
      * Version identifier included in cache keys.
@@ -127,12 +132,12 @@ It is derived at query time from `LoaderInterface::indexes()`, which is instance
 
 ---
 
-## 1. ids
+## 1. pks
 
-List of all IDs.
+List of all PKs.
 
 ```php
-kura:products:v1.0.0:ids → [1, 2, 3, ...]
+kura:products:v1.0.0:pks → [1, 2, 3, ...]
 ```
 
 ### Purpose
@@ -956,20 +961,20 @@ Without this migration, `Bus::batch()->dispatch()` will throw an error.
 
 ```php
 'ttl' => [
-    'ids'        => 3600,   // 1 hour (shortest. rebuild trigger)
+    'pks'        => 3600,   // 1 hour (shortest. rebuild trigger)
     'record'     => 4800,   // 1 hour 20 minutes
     'index'      => 4800,   // 1 hour 20 minutes
-    'ids_jitter' => 600,    // random 0–600s added to ids TTL (thundering herd prevention)
+    'pks_jitter' => 600,    // random 0–600s added to pks TTL (thundering herd prevention)
 ],
 ```
 
 ### Relationships
 
 ```
-ids (3600) < record / index / cidx (4800)
+pks (3600) < record / index / cidx (4800)
 ```
 
-- **ids expires first** → rebuild trigger
+- **pks expires first** → rebuild trigger
 - **record/index are still alive** → can respond to queries during rebuild
 - Index structure is always available from `Loader::indexes()` (no APCu dependency)
 
@@ -991,10 +996,10 @@ return [
     'prefix' => 'kura',
 
     'ttl' => [
-        'ids'        => 3600,   // shortest — expiry triggers rebuild
+        'pks'        => 3600,   // shortest — expiry triggers rebuild
         'record'     => 4800,
         'index'      => 4800,
-        'ids_jitter' => 600,    // random 0–600s added to ids TTL (thundering herd prevention)
+        'pks_jitter' => 600,    // random 0–600s added to pks TTL (thundering herd prevention)
     ],
 
     'lock_ttl' => 60,  // Rebuild lock TTL (seconds). Set to 1.5–2x the expected Loader execution time

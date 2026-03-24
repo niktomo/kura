@@ -57,7 +57,7 @@ ReferenceQueryBuilderInterface extends BuilderContract
   Grammar や Connection は不要
 - **QueryBuilder は状態構築のみ**: where/order/limit の状態を保持し、実行は `CacheProcessor` に委譲。
   index 解決、レコード走査、条件評価は全て Processor 側の責務
-- **LoaderInterface は Kura 側に定義**: `load()`, `columns()`, `indexes()` を持つ。
+- **LoaderInterface は Kura 側に定義**: `load()`, `columns()`, `indexes()`, `primaryKey()`, `version()` を持つ。
   `CsvLoader`、`EloquentLoader`、`QueryBuilderLoader` は `src/Loader/` に含まれる
 
 ### LoaderInterface
@@ -89,6 +89,11 @@ interface LoaderInterface
      *   → 各カラムの単カラム index も自動的に作成される
      */
     public function indexes(): array;
+
+    /**
+     * 主キーのカラム名。
+     */
+    public function primaryKey(): string;
 
     /**
      * キャッシュキーに含まれるバージョン識別子。
@@ -128,12 +133,12 @@ APCu に保存するデータは **4種類**。
 
 ---
 
-## 1. ids
+## 1. pks
 
-全 ID のリスト。
+全 PK のリスト。
 
 ```php
-kura:products:v1.0.0:ids → [1, 2, 3, ...]
+kura:products:v1.0.0:pks → [1, 2, 3, ...]
 ```
 
 ### 役割
@@ -954,17 +959,17 @@ php artisan migrate
 
 ```php
 'ttl' => [
-    'ids'        => 3600,    // 1時間（最短。再構築トリガー）
+    'pks'        => 3600,    // 1時間（最短。再構築トリガー）
     'record'     => 4800,    // 1時間20分
     'index'      => 4800,    // 1時間20分
-    'ids_jitter' => 600,     // ids TTL に加算するランダム値（0〜600秒）スパイク防止
+    'pks_jitter' => 600,     // pks TTL に加算するランダム値（0〜600秒）スパイク防止
 ],
 ```
 
 ### 関係
 
 ```
-ids (3600) < record / index / cidx (4800)
+pks (3600) < record / index / cidx (4800)
 ```
 
 - **pks が最初に消える** → 再構築トリガー
@@ -989,10 +994,10 @@ return [
     'prefix' => 'kura',
 
     'ttl' => [
-        'ids'        => 3600,   // 最短 — 失効が再構築トリガー
+        'pks'        => 3600,   // 最短 — 失効が再構築トリガー
         'record'     => 4800,
         'index'      => 4800,
-        'ids_jitter' => 600,    // ids TTL に加算するランダム値（0〜600秒）スパイク防止
+        'pks_jitter' => 600,    // pks TTL に加算するランダム値（0〜600秒）スパイク防止
     ],
 
     'lock_ttl' => 60,  // rebuild ロックの TTL（秒）。Loader 実行時間の 1.5〜2倍を目安に設定

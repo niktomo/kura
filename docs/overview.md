@@ -211,7 +211,7 @@ WhereEvaluator (Support)
 
 ```
 StoreInterface
-  └─ getIds / putIds
+  └─ getPks / putPks
      getRecord / putRecord
      getIndex / putIndex
      getCompositeIndex / putCompositeIndex
@@ -484,6 +484,11 @@ class EloquentLoader implements LoaderInterface
         return [
             ['columns' => ['name'], 'unique' => false],
         ];
+    }
+
+    public function primaryKey(): string
+    {
+        return 'id';
     }
 
     public function version(): string

@@ -24,7 +24,7 @@ Kura provides a QueryBuilder-compatible API backed by APCu (in-process memory), 
 - **Smart indexes** — Binary search indexes for range queries, composite index hashmaps for O(1) multi-column lookups, automatic chunk splitting for large datasets
 - **Self-Healing** — Cache eviction? Kura automatically rebuilds from the data source — your app never sees stale or missing data
 - **Version management** — Switch reference data versions seamlessly via DB or CSV
-- **Pluggable data sources** — `LoaderInterface` lets you bring any backend: CSV, Eloquent, QueryBuilder, REST API, S3, etc. Built-in loaders included; swap or extend with 4 methods
+- **Pluggable data sources** — `LoaderInterface` lets you bring any backend: CSV, Eloquent, QueryBuilder, REST API, S3, etc. Built-in loaders included; swap or extend with 5 methods
 
 ## Requirements
 
@@ -166,7 +166,7 @@ $loader = new EloquentLoader(
 
 #### Option C: Custom Loader
 
-Any data source works — implement `LoaderInterface` with 4 methods:
+Any data source works — implement `LoaderInterface` with 5 methods:
 
 ```php
 use Kura\Loader\LoaderInterface;
@@ -176,6 +176,7 @@ class MyApiLoader implements LoaderInterface
     public function load(): \Generator { /* fetch & yield records */ }
     public function columns(): array   { /* column → type map */ }
     public function indexes(): array   { /* index definitions */ }
+    public function primaryKey(): string { /* primary key column name */ }
     public function version(): string  { /* cache key identifier */ }
 }
 ```
@@ -223,25 +224,25 @@ That's it — `stations` and `lines` are registered automatically. To override t
 In your `AppServiceProvider` (or a dedicated service provider):
 
 ```php
+use Kura\Contracts\VersionResolverInterface;
 use Kura\Facades\Kura;
 use Kura\Loader\CsvLoader;
-use Kura\Loader\CsvVersionResolver;
 
 public function boot(): void
 {
-    // CSV example
-    $resolver = new CsvVersionResolver(base_path('data/versions.csv'));
+    // Use the container-bound resolver (configured in config/kura.php)
+    $resolver = app(VersionResolverInterface::class);
 
     Kura::register('stations', new CsvLoader(
         tableDirectory: base_path('data/stations'),
         resolver: $resolver,
-    ), primaryKey: 'id');
+    ));
 
     // You can register multiple tables
     Kura::register('lines', new CsvLoader(
         tableDirectory: base_path('data/lines'),
         resolver: $resolver,
-    ), primaryKey: 'id');
+    ));
 }
 ```
 
@@ -307,7 +308,7 @@ Data Source (CSV / DB)
 ### APCu key structure
 
 ```
-kura:stations:v1.0.0:ids                    # all IDs
+kura:stations:v1.0.0:pks                    # all PKs
 kura:stations:v1.0.0:record:1               # single record
 kura:stations:v1.0.0:idx:prefecture         # search index (single column)
 kura:stations:v1.0.0:cidx:prefecture|city   # composite index (O(1) multi-column lookup)
@@ -368,7 +369,7 @@ Kura is intentionally narrow in scope. Two operations are central: **QueryBuilde
 
 | Extension point | How |
 |---|---|
-| Data source | Implement `LoaderInterface` (4 methods: `load`, `columns`, `indexes`, `version`) |
+| Data source | Implement `LoaderInterface` (5 methods: `load`, `columns`, `indexes`, `primaryKey`, `version`) |
 | Version resolution | Bind `VersionResolverInterface` in the service container |
 | Rebuild dispatch | `strategy: callback` with a `\Closure(\Kura\CacheRepository): void` |
 | Per-table TTL | `tables` key in `config/kura.php` |

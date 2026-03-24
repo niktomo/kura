@@ -43,6 +43,11 @@ class MyApiLoader implements LoaderInterface
         ];
     }
 
+    public function primaryKey(): string
+    {
+        return 'id';
+    }
+
     public function version(): string|int|\Stringable
     {
         return $this->api->currentVersion();

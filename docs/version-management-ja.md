@@ -145,7 +145,7 @@ $inner = new DatabaseVersionResolver(
     connection: $app['db']->connection(),
     table: 'reference_versions',
 );
-$resolver = new CachedVersionResolver($inner, ttl: 300);
+$resolver = new CachedVersionResolver($inner, new \Kura\Version\SystemClock(), ttl: 300);
 
 // 初回: DB から全行読み取り、APCu に保存
 // 5分以内の後続呼び出し: APCu の行を now() でフィルタ

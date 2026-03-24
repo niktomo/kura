@@ -106,8 +106,7 @@ return [
      *     versions.csv          — shared version file (id, version, activated_at)
      *     {table}/
      *       data.csv            — required; directory is skipped if absent
-     *       defines.csv         — column type definitions
-     *       indexes.csv         — index definitions
+     *       table.yaml          — column types, index definitions, primary key
      *
      * To override primary_key or TTL for a specific table, use the 'tables' section below.
      */
