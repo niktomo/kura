@@ -138,6 +138,39 @@ Index types are declared by the `Loader` and built at load time. There is no run
 
 ---
 
+## Data Lifecycle Constraints
+
+Kura is designed for **version-gated data**: all data and schema changes are tied to a version bump. This has important implications for deletions.
+
+### Record deletion
+
+Kura does not detect source-side deletions. If a record is removed from the DB or CSV while a version is active, the cache continues to serve that record until TTL expiry or an explicit rebuild.
+
+The safe pattern is a two-phase deletion:
+
+```
+v1.0.0  Record exists, application reads it
+v2.0.0  Application stops referencing the record (logic-level exclusion)
+v3.0.0  Record is physically removed from the data source
+```
+
+The intermediate version gives running caches time to cycle out before the record disappears from the source.
+
+### Schema changes (adding/removing columns)
+
+Column additions and removals are more disruptive than record changes. APCu records are stored with the column structure at rebuild time. A schema change mid-version causes a mismatch between `columns()` and the cached records.
+
+**The only safe approach is a maintenance window:**
+
+1. Stop traffic (or put the table behind a feature flag)
+2. Apply the schema change to the data source
+3. Bump the version and run `php artisan kura:rebuild`
+4. Resume traffic
+
+There is no rolling upgrade path for schema changes. Rolling upgrades are safe only for data-only version bumps (new rows, updated values, no column changes).
+
+---
+
 ## QueryBuilder Compatibility Rules
 
 Kura implements ~99 methods from Laravel's `Illuminate\Database\Query\Builder`. The following rules define what is and is not in scope:
