@@ -32,6 +32,8 @@ Kura provides a QueryBuilder-compatible API backed by APCu (in-process memory), 
 - Laravel ^11.0 / ^12.0 / ^13.0
 - APCu extension (`pecl install apcu`)
 
+> **Laravel Octane is not yet supported.** Persistent processes require per-request state reset (version resolver, override) that is not yet implemented. Octane support is planned for v1.0.
+
 ## Installation
 
 ```bash
