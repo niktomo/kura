@@ -523,6 +523,38 @@ At 100K records, indexed queries respond in under 18 ms; a non-indexed full scan
 
 > Run `php benchmarks/benchmark.php` in the Docker environment to reproduce.
 
+### With JIT + igbinary (100K records, p95)
+
+Enabling PHP JIT and the igbinary APCu serializer delivers an additional **15–40% improvement** across all query types.
+
+| Scenario | Baseline | JIT + igbinary | Improvement |
+|---|---|---|---|
+| `find($id)` — single record | 0.8 µs | 0.7 µs | -12% |
+| `where country` — indexed `=` | 12.93 ms | 10.04 ms | -22% |
+| composite index | 9.96 ms | 7.50 ms | -25% |
+| `whereBetween` — range narrow | 14.58 ms | 11.82 ms | -19% |
+| `orderBy price` — index walk | 17.81 ms | 11.72 ms | **-34%** |
+| `orderBy name` — PHP sort | 42.05 ms | 31.12 ms | **-26%** |
+| `count()` | 12.77 ms | 8.96 ms | **-30%** |
+| non-indexed full scan | 39.79 ms | 32.88 ms | -17% |
+
+JIT accelerates closure evaluation in the `WhereCompiler` and PHP-side sort. igbinary reduces APCu deserialization overhead on every record fetch.
+
+**To enable**, add the following to your `php.ini`:
+
+```ini
+; JIT
+opcache.enable = 1
+opcache.enable_cli = 1
+opcache.jit = tracing
+opcache.jit_buffer_size = 128M
+
+; igbinary serializer for APCu (requires ext-igbinary)
+apc.serializer = igbinary
+```
+
+`ext-igbinary` can be installed via `pecl install igbinary`.
+
 ---
 
 ## Cache Warming

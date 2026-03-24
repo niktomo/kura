@@ -523,6 +523,38 @@ return [
 
 > Docker 環境で `php benchmarks/benchmark.php` を実行して再現できます。
 
+### JIT + igbinary 有効時（100K件・p95）
+
+PHP JIT と igbinary APCu シリアライザーを有効にすると、全クエリタイプで **さらに 15〜40% の改善** が得られます。
+
+| シナリオ | Baseline | JIT + igbinary | 改善率 |
+|---|---|---|---|
+| `find($id)` — 1件取得 | 0.8 µs | 0.7 µs | -12% |
+| `where country` — インデックス `=` | 12.93 ms | 10.04 ms | -22% |
+| composite index | 9.96 ms | 7.50 ms | -25% |
+| `whereBetween` — 範囲（狭い） | 14.58 ms | 11.82 ms | -19% |
+| `orderBy price` — インデックスウォーク | 17.81 ms | 11.72 ms | **-34%** |
+| `orderBy name` — PHP ソート | 42.05 ms | 31.12 ms | **-26%** |
+| `count()` | 12.77 ms | 8.96 ms | **-30%** |
+| 非インデックス全走査 | 39.79 ms | 32.88 ms | -17% |
+
+JIT は `WhereCompiler` のクロージャー評価と PHP ソートを高速化します。igbinary はレコード取得のたびに発生する APCu デシリアライズのオーバーヘッドを削減します。
+
+**有効化するには** `php.ini` に以下を追加してください:
+
+```ini
+; JIT
+opcache.enable = 1
+opcache.enable_cli = 1
+opcache.jit = tracing
+opcache.jit_buffer_size = 128M
+
+; APCu 用 igbinary シリアライザー（ext-igbinary が必要）
+apc.serializer = igbinary
+```
+
+`ext-igbinary` は `pecl install igbinary` でインストールできます。
+
 ---
 
 ## キャッシュウォーミング
