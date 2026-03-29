@@ -14,3 +14,10 @@
 /tests              export-ignore
 /CLAUDE.md          export-ignore
 /CONTRIBUTING.md    export-ignore
+/CHANGELOG.md       export-ignore
+/SECURITY.md        export-ignore
+/benchmarks         export-ignore
+/docs               export-ignore
+/examples           export-ignore
+/Dockerfile         export-ignore
+/docker-compose.yml export-ignore
